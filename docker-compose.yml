@@ -1,0 +1,81 @@
+services:
+  # PostgreSQL local. En producción se reemplaza por RDS cambiando DB_HOST/DB_USER/DB_PASSWORD/DB_SSL.
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: postgres
+    ports:
+      - "${DB_EXPOSED_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Interfaz web para explorar las bases: http://localhost:5050
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      # Modo escritorio: sin pantalla de login de pgAdmin (solo para desarrollo local).
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - db
+
+  backend:
+    build:
+      context: ./Backend
+      target: dev
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      # Archivos (logos y evidencias) en ./storage del proyecto. En producción: STORAGE_DRIVER=s3.
+      STORAGE_DIR: /storage
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./Backend:/app
+      - /app/node_modules
+      - ./storage:/storage
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./Frontend
+    environment:
+      API_PROXY_TARGET: http://backend:4000
+      VITE_USE_POLLING: "true"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./Frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+  # S3 compatible (Adobe S3Mock) para probar el modo de producción en local (opcional):
+  #   docker compose --profile s3 up -d s3   → endpoint http://s3:9090 dentro de Docker
+  s3:
+    image: adobe/s3mock:latest
+    profiles: ["s3"]
+    # Guarda en memoria/temporal: es solo para probar; los datos se pierden al detenerlo.
+    ports:
+      - "9090:9090"
+
+volumes:
+  pgdata:
+  pgadmin_data:

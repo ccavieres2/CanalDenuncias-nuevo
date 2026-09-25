@@ -1,0 +1,4 @@
+.env
+node_modules
+# Archivos subidos en desarrollo (logos, evidencias)
+storage/
