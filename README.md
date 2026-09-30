@@ -128,6 +128,7 @@ Después de agregar dependencias con npm, reconstruye con `docker compose up -d 
 | Resumen | Indicadores, actividad reciente y pendientes (empresas sin admin activo, bases caídas, cuentas sin 2FA). |
 | Empresas | Alta con base de datos dedicada y **plan**, ficha comercial (razón social, RUT, contacto, notas), cambiar de plan, suspender/reactivar, administradores. |
 | Planes | Crear y editar planes: marcos legales, módulos y límites que incluye cada uno. |
+| Consumo | Por empresa: denuncias (total histórico, abiertas, cerradas, del mes, últimos 30 días y por ley), evidencias (cantidad y peso), logo, tamaño de la base de datos y almacenamiento total; exportable a CSV. También en la ficha de cada empresa. Solo cifras, sin contenido; las denuncias de ejemplo van aparte (`services/usage.ts`). |
 | Equipo BeeHives | Otros global_admin: agregar, desactivar, restablecer contraseña o 2FA. |
 | Auditoría | Bitácora de accesos y acciones (quién, qué, cuándo, IP), con filtros. Tabla `audit_events`, solo inserción. |
 | Estado del sistema | Salud de la base central y de cada base de empresa, tamaño y migraciones pendientes. |
@@ -188,6 +189,26 @@ registra `actor_role`. Modalidades (Reglas de gestión):
 
 Gestores, investigadores y resolutores se acotan a categorías (`user_categories`). Las categorías tienen un
 marco legal (`ley_karin`, `ley_20393`, `internal`) que definirá el flujo y los plazos de sus denuncias.
+
+**Áreas autorizadas:** cada categoría indica en **Categorías** qué áreas pueden tenerla a cargo (`category_areas`).
+Una persona solo puede tener una categoría si su área está autorizada; una categoría **sin áreas no la gestiona
+nadie** y no aparece en el portal. En **Áreas** solo se pueden quitar autorizaciones, y en **Usuarios** se elige qué
+categorías ve cada persona dentro de las de su área. Un área nueva no queda autorizada en ninguna categoría hasta que
+se la agregue.
+
+### Conflicto de interés
+
+Quien está involucrado en una denuncia **no la ve con ningún rol** (ni en bandejas, plazos, alertas, mensajes ni
+evidencias; la API responde 404 como si no existiera).
+
+- **Al recibirla**, se excluye automáticamente a los usuarios del canal que coinciden con las personas nombradas por
+  el denunciante (al menos dos palabras del nombre, sin tildes, o el correo exacto; `services/conflicts.ts`). El
+  formulario pregunta además, de forma opcional, si alguien del área que recibe denuncias está involucrado: se escribe
+  el nombre (el portal **no muestra** quiénes gestionan el canal ni dice si hubo coincidencia). Todo queda en la
+  bitácora («Posible conflicto de interés detectado» o «Revisar posible conflicto de interés»).
+- **Después**, el gestor ajusta la lista en «Personas involucradas». Quitar a alguien exige un motivo.
+- **Si todos los gestores quedan excluidos**, la gestiona el **suplente** del plan ante conflicto (Reglas de gestión)
+  si tiene el rol de gestor; si no hay suplente, se avisa por correo al **contacto externo** (sin el contenido).
 
 Menús del `client_admin`: Inicio (puesta en marcha y denuncias de ejemplo), Usuarios y roles, Áreas, Categorías,
 Portal del denunciante, Reglas de gestión, Auditoría y Mi cuenta.

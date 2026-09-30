@@ -123,16 +123,21 @@ Aplica igual a la consola de la plataforma (global_admin) y al panel de cada emp
 | `auditor` | Revisar, sin modificar, y ver el registro de accesos |
 
 - Los permisos se evalúan con el **rol activo** de la sesión y se verifican en cada petición contra la base.
-- **Visibilidad por área y categoría:** cada persona ve solo las denuncias de las categorías que le corresponden.
-- **Conflicto de interés:** quien participó en un caso no puede resolverlo en la modalidad completa.
-- Acciones sobre una denuncia en transacción con la fila bloqueada (`FOR UPDATE`), para evitar dobles cambios.
-
----
-
+- **Visibilidad por área y categoría:** cada persona ve solo las denuncias de las categorías que le corresponden, y
+  solo si su área está autorizada explícitamente en la categoría (una categoría sin áreas no la ve nadie).
+- **Conflicto de interés:** quien participó en un caso no puede resolverlo en la modalidad completa. Quien está
+  involucrado (`cases.involved_user_ids`) no ve el caso con ningún rol: la API responde 404 como si no existiera, y
+  queda fuera de bandejas, plazos, alertas, mensajes y evidencias. Al recibir la denuncia se excluye automáticamente
+  a los usuarios que coinciden con las personas nombradas (`services/conflicts.ts`), antes de que nadie la vea.
+  Quitar a alguien de la lista exige un motivo en la bitácora. Si todos los gestores quedan excluidos, la gestiona el
+  suplente del plan ante conflicto o se avisa al contacto externo.
 - **Plan de la empresa** (`services/plans.ts`): cada ruta que crea o configura algo sujeto al plan lo verifica en el
   servidor (`requireFeature`, `requireFramework`, `requireBelowLimit`); el frontend solo lo oculta. El plan se lee en
   cada petición, así que un cambio aplica de inmediato. Bajar de plan no borra datos ni corta la gestión de denuncias
   en curso (plazos legales).
+- Acciones sobre una denuncia en transacción con la fila bloqueada (`FOR UPDATE`), para evitar dobles cambios.
+
+---
 
 ## 6. Denunciante: anonimato y acceso a su denuncia
 

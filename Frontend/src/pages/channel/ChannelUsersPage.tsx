@@ -722,7 +722,9 @@ function UserFormModal({
                                     {!allowed && (
                                       <span className="mt-0.5 flex items-center gap-1 text-xs text-gray-400">
                                         <Icon name="lock" className="size-3" />
-                                        Solo {c.area_ids.map((id) => areaName.get(id)).join(", ")}
+                                        {c.area_ids.length
+                                          ? `Solo ${c.area_ids.map((id) => areaName.get(id)).join(", ")}`
+                                          : "Sin áreas asignadas (se configura en Categorías)"}
                                       </span>
                                     )}
                                   </span>

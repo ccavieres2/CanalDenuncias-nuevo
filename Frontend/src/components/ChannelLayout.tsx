@@ -129,6 +129,9 @@ export function ChannelLayout() {
   const switchRole = async (role: TenantRole) => {
     const res = await api<{ token: string }>(`/t/${slug}/auth/switch-role`, { method: "POST", token, body: { role } });
     updateToken(res.token);
+    // La sesión nueva va en la cookie y el token del navegador sigue siendo el marcador «cookie»: sin forzar la
+    // recarga, el panel no volvería a pedir /auth/me y seguiría mostrando el rol anterior.
+    setReloadKey((k) => k + 1);
     navigate(base);
   };
 

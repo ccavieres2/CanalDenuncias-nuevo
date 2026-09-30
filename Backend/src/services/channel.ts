@@ -110,9 +110,12 @@ const USER_FROM = "users u LEFT JOIN areas a ON a.id = u.area_id";
 const CATEGORY_COLUMNS = `c.*,
   COALESCE((SELECT array_agg(ca.area_id) FROM category_areas ca WHERE ca.category_id = c.id), '{}') AS area_ids`;
 
-/** ¿El área puede hacerse cargo de la categoría? */
+/**
+ * ¿El área puede hacerse cargo de la categoría? Solo si está autorizada explícitamente en Categorías: una categoría
+ * sin áreas no la gestiona nadie (y no aparece en el portal).
+ */
 export const areaAllowed = (category: Pick<Category, "area_ids">, areaId: string | null) =>
-  category.area_ids.length === 0 || (areaId !== null && category.area_ids.includes(areaId));
+  areaId !== null && category.area_ids.includes(areaId);
 
 /** Categorías que un usuario puede ver efectivamente (para roles que trabajan denuncias). */
 export function effectiveCategories(user: ChannelUser, categories: Category[]): Category[] {
@@ -196,9 +199,8 @@ export async function deleteArea(tenant: Tenant, id: string): Promise<string> {
 }
 
 /**
- * Ajusta, desde el área, las categorías restringidas que tiene a cargo (category_areas). Solo permite
- * quitar: autorizar un área nueva en una categoría es decisión de Categorías, que define la exclusividad.
- * Las categorías abiertas a cualquier área tampoco se tocan aquí.
+ * Ajusta, desde el área, las categorías que tiene a cargo (category_areas). Solo permite quitar: autorizar un área
+ * en una categoría es decisión de Categorías.
  */
 export async function setAreaCategories(
   tenant: Tenant,
@@ -209,12 +211,10 @@ export async function setAreaCategories(
     const area = (await db.query<{ name: string }>("SELECT name FROM areas WHERE id = $1", [areaId])).rows[0];
     if (!area) throw new HttpError(404, "Área no encontrada");
 
-    const restricted = (await db.query<Category>(`SELECT ${CATEGORY_COLUMNS} FROM categories c`)).rows.filter(
-      (c) => c.area_ids.length > 0,
-    );
+    const restricted = (await db.query<Category>(`SELECT ${CATEGORY_COLUMNS} FROM categories c`)).rows;
     const wanted = new Set(categoryIds);
     const unknown = categoryIds.filter((id) => !restricted.some((c) => c.id === id));
-    if (unknown.length) throw new HttpError(400, "Solo se pueden asignar categorías restringidas a áreas específicas");
+    if (unknown.length) throw new HttpError(400, "Alguna de las categorías no existe");
 
     const added: string[] = [];
     const removed: string[] = [];
@@ -224,14 +224,14 @@ export async function setAreaCategories(
         // La exclusividad se define en Categorías: desde el área no se puede sumar a una categoría reservada a otras.
         throw new HttpError(
           403,
-          `"${c.name}" está reservada a otras áreas. Para autorizar a ${area.name}, edítala desde Categorías.`,
+          `"${c.name}" no está autorizada para ${area.name}. Las áreas de cada categoría se definen en Categorías.`,
         );
       } else if (!wanted.has(c.id) && has) {
-        // Quitar la última área dejaría la categoría abierta a todas: no se permite.
+        // Quitar la última área dejaría la categoría sin nadie que la gestione: no se permite desde aquí.
         if (c.area_ids.length === 1) {
           throw new HttpError(
             409,
-            `"${c.name}" quedaría sin áreas autorizadas. Autoriza otra área primero o ábrela a todas desde Categorías.`,
+            `"${c.name}" quedaría sin áreas y nadie podría gestionar sus denuncias. Autoriza otra área primero desde Categorías.`,
           );
         }
         await db.query("DELETE FROM category_areas WHERE category_id = $1 AND area_id = $2", [c.id, areaId]);

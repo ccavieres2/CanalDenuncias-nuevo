@@ -75,4 +75,4 @@ export interface Area {
 
 /** ¿El área puede hacerse cargo de la categoría? (misma regla que el backend) */
 export const areaAllowed = (category: Pick<Category, "area_ids">, areaId: string | null) =>
-  category.area_ids.length === 0 || (areaId !== null && category.area_ids.includes(areaId));
+  areaId !== null && category.area_ids.includes(areaId);

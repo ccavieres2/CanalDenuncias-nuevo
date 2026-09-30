@@ -33,6 +33,8 @@ import {
   procedureFor,
 } from "./procedures.js";
 import { hasFeature, hasFramework, planOf, requireFeature, requireFramework } from "./plans.js";
+import { type ConflictCheck, detectConflicts } from "./conflicts.js";
+import { layout, sendMail } from "./mail.js";
 import { normalizeRut } from "./rut.js";
 import { decryptSecret, encryptSecret, sha256 } from "./secrets.js";
 import { type Tenant, tenantPool } from "./tenants.js";
@@ -212,11 +214,39 @@ const pendingRequired = (milestones: Milestone[], owner?: "investigator") =>
 
 /* ------------------------------------------------------------------ Visibilidad */
 
-function canSee(role: CaseRole, me: ChannelUser, c: CaseRow, myCategoryIds: Set<string>): boolean {
+/** Gestores activos que verían la denuncia (por su área y categorías) y no están excluidos por conflicto de interés. */
+function availableManagers(c: Pick<CaseRow, "category_id" | "involved_user_ids">, users: ChannelUser[], categories: Category[]) {
+  const category = categories.find((x) => x.id === c.category_id);
+  if (!category) return [];
+  return users.filter(
+    (u) =>
+      u.is_active &&
+      u.roles.includes("case_manager") &&
+      !c.involved_user_ids.includes(u.id) &&
+      effectiveCategories(u, [category]).length > 0,
+  );
+}
+
+/**
+ * Plan ante conflicto de interés: si todos los gestores que verían la denuncia están excluidos, la gestiona el
+ * suplente configurado en Reglas de gestión (si tiene el rol de gestor y no está excluido él también).
+ */
+function isConflictSubstitute(me: ChannelUser, c: CaseRow, ctx: Pick<Ctx, "users" | "categories" | "settings">): boolean {
+  return (
+    ctx.settings.caseRules.conflictPlan.substituteUserId === me.id &&
+    me.is_active &&
+    me.roles.includes("case_manager") &&
+    availableManagers(c, ctx.users, ctx.categories).length === 0
+  );
+}
+
+function canSee(role: CaseRole, c: CaseRow, ctx: Ctx): boolean {
+  const { me, myCategoryIds } = ctx;
+  // Quien está involucrado no ve el caso con ningún rol (ni siquiera como suplente).
   if (c.involved_user_ids.includes(me.id)) return false;
   switch (role) {
     case "case_manager":
-      return myCategoryIds.has(c.category_id);
+      return myCategoryIds.has(c.category_id) || isConflictSubstitute(me, c, ctx);
     case "investigator":
       return c.investigator_id === me.id;
     case "resolver":
@@ -224,6 +254,52 @@ function canSee(role: CaseRole, me: ChannelUser, c: CaseRow, myCategoryIds: Set<
     case "auditor":
       return true;
   }
+}
+
+/**
+ * Revisa que la denuncia tenga quién la gestione tras excluir personas por conflicto de interés. Si todos los
+ * gestores están excluidos: la toma el suplente del plan ante conflicto; si no hay suplente, queda en la bitácora y
+ * se avisa por correo al contacto externo del plan (si es un correo). El aviso no incluye el contenido.
+ */
+export async function ensureCoverage(tenant: Tenant, c: Pick<CaseRow, "id" | "code" | "category_id" | "involved_user_ids">) {
+  const [users, categories, settings] = await Promise.all([listUsers(tenant), listCategories(tenant), getSettings(tenant)]);
+  if (availableManagers(c, users, categories).length > 0) return;
+  const pool = tenantPool(tenant);
+  const { substituteUserId, externalContact } = settings.caseRules.conflictPlan;
+  const substitute = users.find(
+    (u) => u.id === substituteUserId && u.is_active && u.roles.includes("case_manager") && !c.involved_user_ids.includes(u.id),
+  );
+  const systemEvent = (action: string, detail: string) =>
+    pool.query("INSERT INTO case_events (case_id, actor_label, action, detail) VALUES ($1, 'Sistema', $2, $3)", [c.id, action, detail]);
+  if (substitute) {
+    await systemEvent(
+      "Plan ante conflicto de interés",
+      `Todos los gestores de esta categoría están excluidos: la gestiona el suplente (${substitute.name}).`,
+    );
+    return;
+  }
+  await systemEvent(
+    "Sin gestor disponible por conflicto de interés",
+    externalContact
+      ? "Todos los gestores están excluidos y no hay suplente. Se avisa al contacto externo del plan ante conflicto."
+      : "Todos los gestores están excluidos y no hay suplente ni contacto externo configurado.",
+  );
+  const email = externalContact?.match(/[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+/)?.[0];
+  if (!email) return;
+  const title = `Denuncia ${c.code} sin gestor disponible`;
+  const paragraphs = [
+    `El canal de denuncias de ${tenant.name} tiene la denuncia ${c.code} y todas las personas que podrían gestionarla están excluidas por conflicto de interés.`,
+    "Estás indicado como contacto externo del plan ante conflicto de interés. Coordina con la empresa quién la gestionará (por ejemplo, designando un suplente en Reglas de gestión).",
+  ];
+  await sendMail(
+    {
+      to: email,
+      subject: title,
+      text: paragraphs.join("\n\n"),
+      html: layout({ organization: tenant.name, title, paragraphs, footer: "Este aviso no incluye el contenido de la denuncia." }),
+    },
+    { tenant, organization: tenant.name },
+  ).catch((err) => console.error(`[conflicto] no se pudo avisar al contacto externo de ${tenant.slug}:`, err));
 }
 
 async function loadContext(tenant: Tenant, userId: string) {
@@ -470,7 +546,7 @@ async function visibleCases(tenant: Tenant, ctx: Ctx, role: CaseRole, where = ""
   return {
     all: rows.rows,
     visible: rows.rows
-      .filter((c) => canSee(role, ctx.me, c, ctx.myCategoryIds))
+      .filter((c) => canSee(role, c, ctx))
       .map((c) => ({ c, milestones: milestonesOf(c, ctx, records, flowData) })),
   };
 }
@@ -480,7 +556,7 @@ export async function listVisibleCases(tenant: Tenant, userId: string, role: Cas
   const [{ all, visible }, stats] = await Promise.all([visibleCases(tenant, ctx, role), messageStats(tenant)]);
   // Cuántas no se muestran por conflicto de interés (las vería con su rol si no estuviera involucrado).
   const hiddenByConflict = all.filter(
-    (c) => c.involved_user_ids.includes(ctx.me.id) && canSee(role, ctx.me, { ...c, involved_user_ids: [] }, ctx.myCategoryIds),
+    (c) => c.involved_user_ids.includes(ctx.me.id) && canSee(role, { ...c, involved_user_ids: [] }, ctx),
   ).length;
   return { cases: visible.map(({ c, milestones }) => present(role, c, ctx, milestones, stats.get(c.id))), hiddenByConflict };
 }
@@ -488,7 +564,7 @@ export async function listVisibleCases(tenant: Tenant, userId: string, role: Cas
 async function findVisibleCase(ctx: Ctx, role: CaseRole, id: string, db: pg.Pool | pg.PoolClient, lock = false) {
   const c = (await db.query<CaseRow>(`SELECT * FROM cases WHERE id = $1${lock ? " FOR UPDATE" : ""}`, [id])).rows[0];
   // Mismo 404 para "no existe", "no te corresponde" y "estás involucrado": no se revela que el caso existe.
-  if (!c || !canSee(role, ctx.me, c, ctx.myCategoryIds)) throw new HttpError(404, "Denuncia no encontrada");
+  if (!c || !canSee(role, c, ctx)) throw new HttpError(404, "Denuncia no encontrada");
   const [records, flowData] = await Promise.all([loadMilestones(db, [c.id]), loadFlowData(db, [c.id])]);
   const milestones = milestonesOf(c, ctx, records, flowData);
   return { c, milestones };
@@ -698,7 +774,7 @@ const COMPANY_RELATIONS = ["same", "contractor", "principal", "third_party"] as 
 export const ACTION_SCHEMAS = {
   start_review: z.object({}),
   reclassify: z.object({ categoryId: z.uuid({ message: "Selecciona una categoría" }), reason: text(5, 1000, "El motivo") }),
-  involve: z.object({ userIds: z.array(z.uuid()).max(100) }),
+  involve: z.object({ userIds: z.array(z.uuid()).max(100), reason: optionalText(500) }),
   assign: z.object({ investigatorId: z.uuid({ message: "Selecciona un investigador" }) }),
   measure: z.object({ text: text(5, 2000, "La medida") }),
   authority: z.object({ authority: text(2, 120, "La autoridad"), detail: optionalText(2000) }),
@@ -789,6 +865,8 @@ export async function applyCaseAction<A extends CaseAction>(
       );
     }
     const karin = frameworkOf(c, ctx) === "ley_karin";
+    // Tras cambiar las exclusiones se revisa que el caso siga teniendo quién lo gestione.
+    let coverageCheck: CaseRow | null = null;
 
     const actor = `${ctx.me.name} · ${ROLE_LABEL[role]}`;
     const event = (label: string, detail: string | null = null, kind = "event") =>
@@ -844,8 +922,14 @@ export async function applyCaseAction<A extends CaseAction>(
         break;
       }
       case "involve": {
-        const { userIds } = input as ActionInput<"involve">;
+        const { userIds, reason } = input as ActionInput<"involve">;
         const valid = [...new Set(userIds)].filter((uid) => ctx.users.some((u) => u.id === uid));
+        // Quitar a alguien de la lista de excluidos exige un motivo (queda en la bitácora): evita que un
+        // involucrado vuelva a tener acceso sin que quede constancia.
+        const removed = c.involved_user_ids.filter((uid) => !valid.includes(uid));
+        if (removed.length && (!reason || reason.length < 5)) {
+          fieldError("reason", "Indica el motivo para quitar a alguien de las personas excluidas");
+        }
         await update("involved_user_ids = $2", [valid]);
         // Si el investigador quedó involucrado, deja el caso y vuelve a revisión para reasignarlo.
         const investigatorOut = c.investigator_id !== null && valid.includes(c.investigator_id);
@@ -855,8 +939,10 @@ export async function applyCaseAction<A extends CaseAction>(
         await event(
           "Conflicto de interés actualizado",
           `${valid.length} ${valid.length === 1 ? "usuario del canal queda excluido" : "usuarios del canal quedan excluidos"} de este caso.` +
-            (investigatorOut ? " El investigador asignado quedó excluido y el caso vuelve a revisión." : ""),
+            (investigatorOut ? " El investigador asignado quedó excluido y el caso vuelve a revisión." : "") +
+            (removed.length ? ` Se quitó de la lista a ${removed.length} ${removed.length === 1 ? "persona" : "personas"}. Motivo: ${reason}` : ""),
         );
+        coverageCheck = { ...c, involved_user_ids: valid };
         summary = valid.includes(ctx.me.id)
           ? "Quedaste excluido de este caso por conflicto de interés; ya no lo verás."
           : "Se actualizaron las personas excluidas del caso.";
@@ -1060,6 +1146,7 @@ export async function applyCaseAction<A extends CaseAction>(
     }
 
     await client.query("COMMIT");
+    if (coverageCheck) await ensureCoverage(tenant, coverageCheck);
     return { code: c.code, summary };
   } catch (err) {
     await client.query("ROLLBACK");
@@ -1228,6 +1315,7 @@ export async function registerCase(tenant: Tenant, userId: string, raw: unknown)
   const identity = checkIdentity(input, karin && withReporter);
 
   const pool = tenantPool(tenant);
+  const conflicts = detectConflicts(ctx.users, input.involved.map((p) => p.name), null);
   const trackingKey = withReporter && input.issueKey ? newTrackingKey() : null;
   const seq = (await pool.query<{ n: string }>("SELECT nextval('case_number_seq') AS n")).rows[0]!.n;
   const code = `DEN-${receivedAt.getFullYear()}-${String(seq).padStart(4, "0")}`;
@@ -1237,9 +1325,10 @@ export async function registerCase(tenant: Tenant, userId: string, raw: unknown)
     `INSERT INTO cases (code, category_id, status, subject, description, is_anonymous, reporter_name, reporter_email, reporter_phone,
                         occurred_when, occurred_where, involved, received_at, due_at, tracking_key_hash, origin, origin_detail,
                         route, reporter_requests_dt, acknowledged_at, origin_channel, external_due_at, company_relation,
-                        other_company, reporter_rut, reporter_is_affected, affected_name, affected_rut, affected_email, representation)
+                        other_company, reporter_rut, reporter_is_affected, affected_name, affected_rut, affected_email, representation,
+                        involved_user_ids)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
-             $25, $26, $27, $28, $29, $30) RETURNING id`,
+             $25, $26, $27, $28, $29, $30, $31) RETURNING id`,
     [
       code,
       category.id,
@@ -1271,10 +1360,12 @@ export async function registerCase(tenant: Tenant, userId: string, raw: unknown)
       identity.affected?.rut ?? null,
       identity.affected?.email ?? null,
       identity.representation,
+      conflicts.userIds,
     ],
   );
   // Versión vigente del flujo de la empresa para este marco.
   await stampFlow(pool, res.rows[0]!.id, framework, receivedAt);
+  await recordConflicts(tenant, { id: res.rows[0]!.id, code, category_id: category.id, involved_user_ids: conflicts.userIds }, conflicts);
   const actor = `${ctx.me.name} · ${ROLE_LABEL.case_manager}`;
   await pool.query(
     `INSERT INTO case_events (case_id, actor_label, actor_role, actor_user_id, action, detail, kind)
@@ -1307,7 +1398,8 @@ export async function getPublicPortal(tenant: Tenant) {
     relations: REPORTER_RELATIONS,
     // Solo las categorías de los marcos legales que incluye el plan de la empresa.
     categories: categories
-      .filter((c) => c.is_active && hasFramework(plan, c.legal_framework))
+      // Una categoría sin áreas autorizadas no tiene quién la gestione: no se ofrece.
+      .filter((c) => c.is_active && hasFramework(plan, c.legal_framework) && c.area_ids.length > 0)
       .map((c) => ({ id: c.id, name: c.name, description: c.description, framework: c.legal_framework, asksDetail: c.asks_detail })),
     features: { authenticator: hasFeature(plan, "reporter_authenticator") },
   };
@@ -1334,6 +1426,8 @@ export const reportSchema = z
     offenderRelation: z.enum(OFFENDER_RELATIONS).optional(),
     ongoing: z.enum(["yes", "no", "unknown"]).optional(),
     urgentProtection: z.boolean().default(false),
+    // Conflicto de interés: nombre de alguien del área que recibe denuncias que estaría involucrado (opcional).
+    teamConflict: optionalText(150),
     privacyAccepted: z.literal(true, { message: "Debes aceptar el aviso de privacidad" }),
   })
   .superRefine((v, ctx) => {
@@ -1347,6 +1441,31 @@ function newTrackingKey(): string {
 const hashKey = (key: string) => sha256(key.toUpperCase().replace(/[^A-Z2-7]/g, ""));
 
 /** Recibe una denuncia desde el portal público. No se guarda la IP ni datos del dispositivo. */
+/** Deja en la bitácora lo detectado al recibir la denuncia y revisa que siga teniendo quién la gestione. */
+async function recordConflicts(
+  tenant: Tenant,
+  c: Pick<CaseRow, "id" | "code" | "category_id" | "involved_user_ids">,
+  conflicts: ConflictCheck,
+) {
+  const pool = tenantPool(tenant);
+  const systemEvent = (action: string, detail: string) =>
+    pool.query("INSERT INTO case_events (case_id, actor_label, action, detail) VALUES ($1, 'Sistema', $2, $3)", [c.id, action, detail]);
+  const n = conflicts.userIds.length;
+  if (n) {
+    await systemEvent(
+      "Posible conflicto de interés detectado",
+      `${n} ${n === 1 ? "usuario del canal coincide" : "usuarios del canal coinciden"} con personas nombradas en la denuncia y ${n === 1 ? "queda excluido" : "quedan excluidos"} desde su recepción. Revísalo en «Personas involucradas»; si es un error, se puede revertir indicando el motivo.`,
+    );
+  }
+  if (conflicts.unmatchedTeamName) {
+    await systemEvent(
+      "Revisar posible conflicto de interés",
+      `El denunciante indicó que una persona del área que recibe denuncias estaría involucrada («${conflicts.unmatchedTeamName}»), pero no coincide con ningún usuario del canal. Revisa si corresponde excluir a alguien.`,
+    );
+  }
+  if (n) await ensureCoverage(tenant, c);
+}
+
 export async function submitReport(tenant: Tenant, raw: unknown): Promise<{ id: string; code: string; trackingKey: string }> {
   const input = reportSchema.parse(raw);
   const { portal } = await getSettings(tenant);
@@ -1354,7 +1473,9 @@ export async function submitReport(tenant: Tenant, raw: unknown): Promise<{ id: 
     throw new HttpError(400, "Este canal requiere que te identifiques para recibir la denuncia.");
   }
   const [categories, plan] = await Promise.all([listCategories(tenant), planOf(tenant)]);
-  const category = categories.find((c) => c.id === input.categoryId && c.is_active && hasFramework(plan, c.legal_framework));
+  const category = categories.find(
+    (c) => c.id === input.categoryId && c.is_active && hasFramework(plan, c.legal_framework) && c.area_ids.length > 0,
+  );
   if (!category) throw new HttpError(400, "Selecciona de qué se trata");
   const identity = checkIdentity(input, category.legal_framework === "ley_karin");
   const karin = category.legal_framework === "ley_karin";
@@ -1364,6 +1485,8 @@ export async function submitReport(tenant: Tenant, raw: unknown): Promise<{ id: 
   if (karin && !input.offenderRelation) fieldError("offenderRelation", "Indica quién realizó la conducta");
 
   const pool = tenantPool(tenant);
+  // Conflicto de interés: quien coincida con las personas nombradas queda excluido desde que se crea la denuncia.
+  const conflicts = detectConflicts(await listUsers(tenant), input.involved.map((p) => p.name), input.teamConflict);
   const trackingKey = newTrackingKey();
   const receivedAt = new Date();
   const seq = (await pool.query<{ n: string }>("SELECT nextval('case_number_seq') AS n")).rows[0]!.n;
@@ -1375,9 +1498,9 @@ export async function submitReport(tenant: Tenant, raw: unknown): Promise<{ id: 
                         reporter_relation, occurred_when, occurred_where, involved, received_at, due_at,
                         tracking_key_hash, reporter_requests_dt, reporter_rut, reporter_is_affected, affected_name,
                         affected_rut, affected_email, representation, topic_detail, offender_relation, ongoing,
-                        urgent_protection, privacy_accepted_at)
+                        urgent_protection, privacy_accepted_at, involved_user_ids)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
-             $24, $25, $26, now())
+             $24, $25, $26, now(), $27)
      RETURNING id`,
     [
       code,
@@ -1406,10 +1529,12 @@ export async function submitReport(tenant: Tenant, raw: unknown): Promise<{ id: 
       karin ? (input.offenderRelation ?? null) : null,
       karin ? (input.ongoing ?? null) : null,
       karin && input.urgentProtection,
+      conflicts.userIds,
     ],
   );
   // Versión vigente del flujo de la empresa para este marco.
   await stampFlow(pool, res.rows[0]!.id, category.legal_framework, receivedAt);
+  await recordConflicts(tenant, { id: res.rows[0]!.id, code, category_id: category.id, involved_user_ids: conflicts.userIds }, conflicts);
   await pool.query(
     "INSERT INTO case_events (case_id, actor_label, action, detail) VALUES ($1, 'Sistema', 'Denuncia recibida por el canal', $2)",
     [

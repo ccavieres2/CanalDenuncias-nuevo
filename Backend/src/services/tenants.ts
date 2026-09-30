@@ -154,15 +154,14 @@ export async function createTenant(
     await createDatabase(tenant.db_host, tenant.db_port, tenant.db_name);
     databaseCreated = true;
     await runMigrations(tenantPool(tenant), TENANT_MIGRATIONS);
-    // Las migraciones crean áreas de ejemplo; la empresa parte solo con las que usan las categorías de los marcos
-    // legales de su plan (plan Básico: solo Recursos Humanos) y crea las demás si las necesita. Así no parte
-    // excedida si su plan limita las áreas. Si después se amplía el plan, applyDefaultAreas repone las necesarias.
-    await tenantPool(tenant).query(
-      `DELETE FROM areas a WHERE NOT EXISTS (
-         SELECT 1 FROM category_areas ca JOIN categories c ON c.id = ca.category_id
-          WHERE ca.area_id = a.id AND c.legal_framework = ANY($1::text[]))`,
-      [await planFrameworks(input.planId)],
-    );
+    // Las migraciones crean áreas de ejemplo; la empresa parte solo con las que necesitan los marcos legales de su
+    // plan (plan Básico: solo Recursos Humanos) y crea las demás si las necesita. Así no parte excedida si su plan
+    // limita las áreas. Las categorías sin restricción legal quedan autorizadas para esas mismas áreas; si después
+    // se amplía el plan, applyDefaultAreas repone las áreas de la ley habilitada.
+    const keep = [...new Set((await planFrameworks(input.planId)).flatMap((fw) => DEFAULT_AREAS[fw] ?? []))];
+    await tenantPool(tenant).query("DELETE FROM areas WHERE NOT (lower(name) = ANY($1::text[]))", [
+      (keep.length ? keep : ["Recursos Humanos"]).map((n) => n.toLowerCase()),
+    ]);
     const { credentials } = await insertClientAdmin(tenant, input.admin);
 
     const res = await globalPool.query<Tenant>(

@@ -11,6 +11,7 @@ import { TeamPage } from "./pages/TeamPage";
 import { TenantCreatePage } from "./pages/TenantCreatePage";
 import { TenantDetailPage } from "./pages/TenantDetailPage";
 import { PlansPage } from "./pages/PlansPage";
+import { UsagePage } from "./pages/UsagePage";
 import { TenantLoginPage } from "./pages/TenantLoginPage";
 import { TenantsListPage } from "./pages/TenantsListPage";
 import { AccessLogPage } from "./pages/channel/AccessLogPage";
@@ -53,6 +54,7 @@ function App() {
           <Route path="tenants/new" element={<TenantCreatePage />} />
           <Route path="tenants/:slug" element={<TenantDetailPage />} />
           <Route path="plans" element={<PlansPage />} />
+          <Route path="usage" element={<UsagePage />} />
           <Route path="team" element={<TeamPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="system" element={<SystemPage />} />

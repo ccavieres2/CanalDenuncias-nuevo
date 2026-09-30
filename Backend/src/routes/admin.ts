@@ -8,6 +8,7 @@ import { hashPassword } from "../services/auth.js";
 import { resetMfa } from "../services/mfa.js";
 import { generateTemporaryPassword } from "../services/passwords.js";
 import { getOverview, getSystemStatus } from "../services/system.js";
+import { listUsage, tenantUsage } from "../services/usage.js";
 import { createTeamMember, getTeamMember, listTeam } from "../services/team.js";
 import {
   SLUG_REGEX,
@@ -204,6 +205,15 @@ adminRouter.post("/tenants", async (req, res) => {
     metadata: { initialAdmin: credentials.email },
   });
   res.status(201).json({ tenant: publicTenant(tenant), credentials });
+});
+
+/** Consumo por empresa (denuncias, archivos y base de datos), para precios y capacidad. Solo cifras. */
+adminRouter.get("/usage", async (_req, res) => {
+  res.json({ usage: await listUsage() });
+});
+
+adminRouter.get("/tenants/:slug/usage", async (req, res) => {
+  res.json({ usage: await tenantUsage(await getTenantOr404(req.params.slug)) });
 });
 
 adminRouter.get("/tenants/:slug", async (req, res) => {

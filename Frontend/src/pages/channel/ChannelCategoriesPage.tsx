@@ -1,7 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { RowMenu } from "../../components/dialogs";
-import { Alert, Badge, Breadcrumbs, Button, Field, Icon, Modal, PageHeader, Panel, TextArea, Toggle } from "../../components/ui";
+import { Alert, Badge, Breadcrumbs, Button, Field, Icon, Modal, PageHeader, Panel, TextArea } from "../../components/ui";
 import { ApiError, api } from "../../lib/api";
 import { useChannel } from "../../lib/channel-context";
 import type { Area, Category } from "../../lib/channel-types";
@@ -119,12 +119,17 @@ export function ChannelCategoriesPage() {
                         </div>
                         {c.description && <p className="mt-1 text-sm leading-relaxed text-gray-500">{c.description}</p>}
                         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs font-medium">
-                          <span className="inline-flex items-center gap-1.5 text-gray-600">
-                            <Icon name={c.area_ids.length ? "lock" : "building"} className="size-3.5" />
-                            {c.area_ids.length
-                              ? `Solo ${c.area_ids.map((id) => areaName.get(id) ?? "…").join(", ")}`
-                              : "Cualquier área"}
-                          </span>
+                          {c.area_ids.length > 0 && (
+                            <span className="inline-flex items-center gap-1.5 text-gray-600">
+                              <Icon name="lock" className="size-3.5" />
+                              Solo {c.area_ids.map((id) => areaName.get(id) ?? "…").join(", ")}
+                            </span>
+                          )}
+                          {!c.area_ids.length && (
+                            <span className="inline-flex items-center gap-1.5 text-amber-700">
+                              Sin áreas: nadie la gestiona y no aparece en el portal
+                            </span>
+                          )}
                           {c.is_active && (
                             <span
                               className={`inline-flex items-center gap-1.5 ${c.assigned_users ? "text-gray-600" : "text-amber-700"}`}
@@ -217,19 +222,18 @@ function SectionAreasModal({
   const uniform = categories.every(
     (c) => c.area_ids.length === categories[0]!.area_ids.length && c.area_ids.every((id) => common.includes(id)),
   );
-  const [restricted, setRestricted] = useState(categories.some((c) => c.area_ids.length > 0));
   const [areaIds, setAreaIds] = useState<string[]>(common);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function save() {
     setError(null);
-    if (restricted && !areaIds.length) {
-      setError("Selecciona al menos un área autorizada o permite cualquier área.");
+    if (!areaIds.length) {
+      setError("Selecciona al menos un área: sin áreas nadie podría gestionar estas denuncias.");
       return;
     }
     setLoading(true);
-    const next = restricted ? areaIds : [];
+    const next = areaIds;
     const pending = categories.filter(
       (c) => c.area_ids.length !== next.length || !c.area_ids.every((id) => next.includes(id)),
     );
@@ -276,30 +280,23 @@ function SectionAreasModal({
             aquí.
           </Alert>
         )}
-        <div className="space-y-3 rounded-lg bg-gray-50 p-4 ring-1 ring-gray-200/70 ring-inset">
-          <Toggle
-            label="Restringir a áreas específicas"
-            description="Si no lo activas, cualquier área podrá tener a cargo las categorías de esta sección."
-            checked={restricted}
-            onChange={setRestricted}
-          />
-          {restricted && (
-            <div className="grid gap-2 pt-1 sm:grid-cols-2">
-              {areas.map((a) => (
-                <label key={a.id} className="flex cursor-pointer items-center gap-2.5 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={areaIds.includes(a.id)}
-                    onChange={() =>
-                      setAreaIds((ids) => (ids.includes(a.id) ? ids.filter((x) => x !== a.id) : [...ids, a.id]))
-                    }
-                    className="size-4 rounded accent-brand-navy"
-                  />
-                  {a.name}
-                </label>
-              ))}
-            </div>
-          )}
+        <div className="rounded-lg bg-gray-50 p-4 ring-1 ring-gray-200/70 ring-inset">
+          <p className="mb-3 text-sm text-gray-600">Solo las personas de estas áreas podrán tener a cargo sus denuncias.</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {areas.map((a) => (
+              <label key={a.id} className="flex cursor-pointer items-center gap-2.5 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={areaIds.includes(a.id)}
+                  onChange={() =>
+                    setAreaIds((ids) => (ids.includes(a.id) ? ids.filter((x) => x !== a.id) : [...ids, a.id]))
+                  }
+                  className="size-4 rounded accent-brand-navy"
+                />
+                {a.name}
+              </label>
+            ))}
+          </div>
         </div>
         <p className="text-xs text-gray-500">
           Si quitas un área, sus personas dejarán de tener a cargo las categorías de esta sección.
@@ -329,7 +326,6 @@ function CategoryModal({
     category?.legal_framework ?? (frameworks.includes("internal") ? "internal" : frameworks[0]!),
   );
   const [areaIds, setAreaIds] = useState<string[]>(category?.area_ids ?? []);
-  const [restricted, setRestricted] = useState((category?.area_ids.length ?? 0) > 0);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -339,12 +335,12 @@ function CategoryModal({
     setError(null);
     setFields({});
     setLoading(true);
-    if (restricted && !areaIds.length) {
-      setError("Selecciona al menos un área autorizada o permite cualquier área.");
+    if (!areaIds.length) {
+      setError("Selecciona al menos un área: sin áreas nadie podría gestionar sus denuncias.");
       setLoading(false);
       return;
     }
-    const body = { name, description, legalFramework: framework, areaIds: restricted ? areaIds : [] };
+    const body = { name, description, legalFramework: framework, areaIds };
     try {
       const res = await api<{ category: Category }>(
         category ? `${apiBase}/console/categories/${category.id}` : `${apiBase}/console/categories`,
@@ -414,34 +410,25 @@ function CategoryModal({
           <p className="mt-0.5 text-sm text-gray-500">
             Solo personas de estas áreas podrán gestionar, investigar o resolver sus denuncias.
           </p>
-          <div className="mt-3 space-y-3 rounded-lg bg-gray-50 p-4 ring-1 ring-gray-200/70 ring-inset">
-            <Toggle
-              label="Restringir a áreas específicas"
-              description={
-                framework === "ley_karin"
-                  ? "Recomendado para Ley Karin: normalmente Recursos Humanos."
-                  : "Si no lo activas, cualquier área podrá tenerla a cargo."
-              }
-              checked={restricted}
-              onChange={setRestricted}
-            />
-            {restricted && (
-              <div className="grid gap-2 pt-1 sm:grid-cols-2">
-                {areas.map((a) => (
-                  <label key={a.id} className="flex cursor-pointer items-center gap-2.5 text-sm text-gray-700">
-                    <input
-                      type="checkbox"
-                      checked={areaIds.includes(a.id)}
-                      onChange={() =>
-                        setAreaIds((ids) => (ids.includes(a.id) ? ids.filter((x) => x !== a.id) : [...ids, a.id]))
-                      }
-                      className="size-4 rounded accent-brand-navy"
-                    />
-                    {a.name}
-                  </label>
-                ))}
-              </div>
+          <div className="mt-3 rounded-lg bg-gray-50 p-4 ring-1 ring-gray-200/70 ring-inset">
+            {framework === "ley_karin" && (
+              <p className="mb-3 text-sm text-gray-600">Recomendado para Ley Karin: normalmente Recursos Humanos.</p>
             )}
+            <div className="grid gap-2 sm:grid-cols-2">
+              {areas.map((a) => (
+                <label key={a.id} className="flex cursor-pointer items-center gap-2.5 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={areaIds.includes(a.id)}
+                    onChange={() =>
+                      setAreaIds((ids) => (ids.includes(a.id) ? ids.filter((x) => x !== a.id) : [...ids, a.id]))
+                    }
+                    className="size-4 rounded accent-brand-navy"
+                  />
+                  {a.name}
+                </label>
+              ))}
+            </div>
           </div>
           {category && (
             <p className="mt-2 text-xs text-gray-500">

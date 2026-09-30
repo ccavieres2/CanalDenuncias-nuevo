@@ -21,7 +21,9 @@ import {
   th,
 } from "../components/ui";
 import { PlanPicker, PlanSummary } from "../components/PlanPicker";
+import { UsagePanel } from "../components/UsagePanel";
 import { useAdmin } from "../lib/admin-context";
+import type { TenantUsage } from "../lib/usage";
 import { type Plan, usePlans } from "../lib/plans";
 import { ApiError, api } from "../lib/api";
 import type { AuditEvent, ClientAdmin, Credentials, Tenant, TenantProfile } from "../lib/types";
@@ -59,6 +61,12 @@ export function TenantDetailPage() {
   const [changingPlan, setChangingPlan] = useState(false);
   const { plans } = usePlans(token, logout);
   const plan = plans?.find((p) => p.id === tenant?.planId);
+  const [usage, setUsage] = useState<TenantUsage | null>(null);
+  useEffect(() => {
+    api<{ usage: TenantUsage }>(`/admin/tenants/${slug}/usage`, { token })
+      .then((res) => setUsage(res.usage))
+      .catch(() => undefined);
+  }, [slug, token, reloadKey]);
 
   useEffect(() => {
     const onError = (err: unknown) => {
@@ -246,8 +254,9 @@ export function TenantDetailPage() {
           </Panel>
         </div>
 
-        {/* Columna derecha: administradores y actividad */}
+        {/* Columna derecha: consumo, administradores y actividad */}
         <div className="min-w-0 space-y-6">
+          <UsagePanel usage={usage} />
           <Panel
             flush
             title="Administradores"

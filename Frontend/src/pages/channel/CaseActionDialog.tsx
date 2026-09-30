@@ -153,7 +153,7 @@ export function CaseActionDialog({
       case "reject":
         return { reason: form.reason };
       case "involve":
-        return { userIds: [...involved] };
+        return { userIds: [...involved], reason: form.reason };
       case "set_route":
         return {
           route: form.route,
@@ -742,6 +742,18 @@ export function CaseActionDialog({
               </li>
             ))}
           </ul>
+        )}
+        {action === "involve" && detail.involvedUsers.some((u) => !involved.has(u.id)) && (
+          <TextArea
+            label="Motivo para quitar a alguien de las personas excluidas"
+            required
+            rows={2}
+            minLength={5}
+            maxLength={500}
+            {...bind("reason")}
+            placeholder="Ej.: Coincidencia de nombre con otra persona; no está involucrado."
+            hint="Queda en la bitácora del caso."
+          />
         )}
       </form>
     </Modal>

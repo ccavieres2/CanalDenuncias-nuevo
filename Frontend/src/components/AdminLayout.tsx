@@ -14,6 +14,7 @@ const NAV: NavSection[] = [
     items: [
       { to: "/admin/tenants", label: "Empresas", icon: "building" },
       { to: "/admin/plans", label: "Planes", icon: "archive" },
+      { to: "/admin/usage", label: "Consumo", icon: "chart" },
     ],
   },
   {

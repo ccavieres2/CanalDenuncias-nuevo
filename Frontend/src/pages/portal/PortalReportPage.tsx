@@ -248,6 +248,7 @@ export function PortalReportPage() {
   const [occurredWhen, setOccurredWhen] = useState("");
   const [occurredWhere, setOccurredWhere] = useState("");
   const [involved, setInvolved] = useState<Involved[]>([]);
+  const [teamConflict, setTeamConflict] = useState("");
   const [anonymous, setAnonymous] = useState<boolean | null>(
     data.portal.allowAnonymous ? null : false,
   );
@@ -423,6 +424,7 @@ export function PortalReportPage() {
           occurredWhen,
           occurredWhere,
           involved: involved.filter((p) => p.name.trim()),
+          teamConflict: teamConflict.trim() || undefined,
           relation: relation || undefined,
           requestsDt: karin && investigator === "dt",
           topicDetail: category?.asksDetail ? topicDetail : undefined,
@@ -846,6 +848,20 @@ export function PortalReportPage() {
                   Agregar persona
                 </Button>
               )}
+
+              {/* Conflicto de interés: se pide el nombre sin mostrar quiénes gestionan el canal. */}
+              <div className="rounded-xl bg-gray-50 px-4 py-4 ring-1 ring-gray-200/70 ring-inset">
+                <Field
+                  label="¿Alguien que trabaja en el área que recibe denuncias está involucrado? (opcional)"
+                  description="Por ejemplo, alguien de Recursos Humanos o de Cumplimiento. Escribe su nombre y apellido: no tendrá acceso a tu denuncia."
+                  value={teamConflict}
+                  maxLength={150}
+                  onChange={(e) => setTeamConflict(e.target.value)}
+                  placeholder="Nombre y apellido"
+                  autoComplete="off"
+                  error={fields.teamConflict}
+                />
+              </div>
             </>
           )}
 
