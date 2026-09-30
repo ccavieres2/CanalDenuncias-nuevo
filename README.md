@@ -126,7 +126,8 @@ Después de agregar dependencias con npm, reconstruye con `docker compose up -d 
 | Sección | Qué permite |
 |---|---|
 | Resumen | Indicadores, actividad reciente y pendientes (empresas sin admin activo, bases caídas, cuentas sin 2FA). |
-| Empresas | Alta con base de datos dedicada, ficha comercial (razón social, RUT, contacto, notas), suspender/reactivar, administradores. |
+| Empresas | Alta con base de datos dedicada y **plan**, ficha comercial (razón social, RUT, contacto, notas), cambiar de plan, suspender/reactivar, administradores. |
+| Planes | Crear y editar planes: marcos legales, módulos y límites que incluye cada uno. |
 | Equipo BeeHives | Otros global_admin: agregar, desactivar, restablecer contraseña o 2FA. |
 | Auditoría | Bitácora de accesos y acciones (quién, qué, cuándo, IP), con filtros. Tabla `audit_events`, solo inserción. |
 | Estado del sistema | Salud de la base central y de cada base de empresa, tamaño y migraciones pendientes. |
@@ -136,6 +137,35 @@ Después de agregar dependencias con npm, reconstruye con `docker compose up -d 
   y deben cambiarla en su primer ingreso, junto con configurar el 2FA.
 - Desactivar una cuenta o cambiar/resetear su contraseña **cierra sus sesiones abiertas** de inmediato.
 - Nadie puede desactivarse ni resetearse a sí mismo desde "Equipo", y una empresa no puede quedar sin administradores activos.
+
+### Planes
+
+Cada empresa tiene un plan (`canal_global.plans`, `tenants.plan_id`) que se elige al crearla y se puede cambiar desde
+su ficha. Lo define el equipo BeeHives en **Consola → Planes**:
+
+| Qué define | Opciones |
+|---|---|
+| Marcos legales | Ley Karin · Ley 20.393 · Ley 21.719 · Normativa interna |
+| Módulos | Evidencias adjuntas · App de autenticación del denunciante · Registro de denuncias por otras vías · Reportes · Flujos editables · Marca propia · Correo saliente propio |
+| Límites (vacío = sin límite) | Usuarios activos · Áreas · Categorías activas |
+
+- **Lo que el plan no incluye no se muestra**: ni en el menú del panel, ni en el portal del denunciante (solo aparecen
+  las categorías de sus marcos legales). El backend además lo rechaza (403 con código `plan_feature`,
+  `plan_framework` o `plan_limit`), así que no se puede usar llamando directo a la API.
+- **Cambiar de plan aplica de inmediato y nunca borra datos.** Al bajar de plan, lo que queda fuera deja de mostrarse y
+  no se puede crear de nuevo, pero se conserva: los usuarios sobre el límite siguen activos (solo no se pueden crear
+  más), las denuncias en curso de un marco que el plan ya no incluye se siguen gestionando hasta su cierre (con sus
+  plazos legales), las evidencias ya recibidas se pueden descargar, y la marca y los flujos ya guardados siguen
+  vigentes. Siempre se puede quitar el SMTP propio o volver al flujo recomendado.
+- Una empresa nueva parte solo con las áreas que usan las categorías de las leyes de **su plan** (Ley Karin →
+  Recursos Humanos; Ley 20.393 → Cumplimiento y Legal; el plan Básico parte solo con Recursos Humanos). Las demás las
+  crea la empresa. Al ampliar el plan (cambiar la empresa a uno mayor o agregarle una ley al plan), las categorías de
+  la ley recién habilitada recuperan su restricción por defecto y se crea el área si falta (`applyDefaultAreas`), para
+  que no queden abiertas a cualquier área.
+- Al migrar, las empresas existentes quedaron en el plan **Completo**. También se crea **Básico** (solo Ley Karin y
+  hasta 5 usuarios) como ejemplo. Un plan en uso no se puede eliminar ni desactivar.
+- El plan se consulta en cada petición (`services/plans.ts`). Los cambios de plan quedan en la auditoría
+  (`tenant.plan_changed`, `plan.created`, `plan.updated`, `plan.deleted`).
 
 ## Panel de cada empresa (`/{slug}`)
 
@@ -289,6 +319,38 @@ denuncia + el código de 6 dígitos**. El secreto se guarda cifrado; cada códig
 fallidos la denuncia se bloquea 15 minutos (la clave sigue funcionando). La app muestra la cuenta como
 «Seguimiento: DEN-…», sin el nombre de la empresa. Al ingresar se entrega una sesión de 30 minutos válida solo para
 esa denuncia y esa empresa.
+
+### Alertas de plazos
+
+- **Campana** en la barra superior del gestor y del investigador: plazos **vencidos** y **por vencer** (5 días o
+  menos) de las denuncias a su cargo, cada uno con enlace a su denuncia. Se actualiza al navegar y cada 5 minutos
+  (`GET /api/t/:slug/cases/alerts`).
+- **Resumen diario por correo** a cada responsable mientras tenga plazos vencidos o por vencer: como máximo uno al
+  día, desde las 8:00 de Chile (el backend revisa cada hora; `deadline_reminders` evita duplicados entre ejecuciones e
+  instancias). Solo lleva el código de la denuncia, el hito y la fecha, nunca el relato ni nombres.
+- **Responsable** según el procedimiento y el flujo de la empresa: los hitos legales y los pasos del gestor van a los
+  gestores que ven esa categoría (por área y categorías: Ley Karin → gestores de Recursos Humanos); los pasos del
+  investigador, al investigador asignado. No generan alertas los plazos que dependen de la DT, y las denuncias de
+  ejemplo no generan correos (en la campana aparecen marcadas).
+- Lógica en `Backend/src/services/alerts.ts`.
+
+### Evidencias del denunciante
+
+Desde el seguimiento, el denunciante puede **adjuntar archivos** una vez que la denuncia pasó **a revisión** y hasta
+que se cierra (en «recibida» todavía no; cerrada, ya no).
+
+- **Formatos:** pdf, jpg, png, webp, heic, mp4, mov, m4a, mp3, ogg, docx, xlsx y pptx. Se valida el **contenido** del
+  archivo (su firma), no solo la extensión. Hasta **10 MB por archivo**, **20 archivos** y **100 MB** por denuncia.
+- Se guardan en el almacenamiento privado de la empresa (`<empresa>/denuncias/<ley>/<código>/…`, carpeta local o S3)
+  y en `case_files` queda el nombre, tipo, tamaño y la **huella SHA-256** al recibirlo (para acreditar que no cambió).
+- El denunciante ve la lista de lo que adjuntó, pero no puede descargar ni borrar archivos. Cada subida deja un evento
+  en la bitácora del caso. Como el resto del portal, no se guarda IP ni dispositivo y no se audita.
+- **Gestor, investigador asignado y comité** ven el panel **Evidencias del denunciante** en la ficha y descargan los
+  archivos (siempre como adjunto; cada descarga queda en la auditoría como `case.file_downloaded`). El **auditor** ve
+  cuántos hay y cuándo llegaron, sin nombre ni acceso al contenido. Rigen las mismas reglas de visibilidad y conflicto
+  de interés que la ficha.
+- Rutas: `POST /api/t/:slug/public/track/files` (cuerpo binario; sesión en `X-Reporter-Session` y nombre en
+  `X-File-Name`) y `GET /api/t/:slug/cases/:id/files/:fileId`.
 
 ## Flujos de gestión editables
 

@@ -4,17 +4,19 @@ import { api } from "../lib/api";
 import { brandStyle } from "../lib/branding";
 import { CASE_VIEW, type CaseRole } from "../lib/cases";
 import type { ChannelContext, ChannelTenant, ChannelUser } from "../lib/channel-context";
+import { type PlanFeature, type TenantPlan, planHas } from "../lib/plans";
 import { ROLES, ROLE_ORDER, type TenantRole } from "../lib/roles";
 import { clearToken, getToken, setToken, tenantScope } from "../lib/session";
+import { AlertsBell } from "./AlertsBell";
 import { ConsoleShell, type NavSection } from "./ConsoleShell";
 import { FullPageSpinner } from "./ui";
 
 /** Menú de los roles que gestionan denuncias: misma estructura, ítems según el rol. */
-function caseNav(role: CaseRole, base: string): NavSection[] {
+function caseNav(role: CaseRole, base: string, plan: TenantPlan): NavSection[] {
   const inbox = { to: `${base}/cases`, label: CASE_VIEW[role].menu, icon: "inbox" as const };
   const deadlines = { to: `${base}/deadlines`, label: "Plazos", icon: "calendar" as const };
   const messages = { to: `${base}/messages`, label: "Mensajes", icon: "mail" as const };
-  const reports = { to: `${base}/reports`, label: "Reportes", icon: "chart" as const };
+  const reports = { to: `${base}/reports`, label: "Reportes", icon: "chart" as const, hidden: !planHas(plan, "reports") };
   const resources = {
     title: "Recursos",
     items: [
@@ -59,9 +61,17 @@ function caseNav(role: CaseRole, base: string): NavSection[] {
 }
 
 /** Menú según el rol activo. Solo el administrador del canal ve la configuración. */
-function navFor(user: ChannelUser, base: string): NavSection[] {
+function navFor(user: ChannelUser, base: string, plan: TenantPlan): NavSection[] {
   const home: NavSection = { title: "General", items: [{ to: base, label: "Inicio", icon: "grid", end: true }] };
-  if (user.activeRole !== "client_admin") return [home, ...caseNav(user.activeRole as CaseRole, base)];
+  const sections: NavSection[] =
+    user.activeRole !== "client_admin" ? [home, ...caseNav(user.activeRole as CaseRole, base, plan)] : adminNav(base, plan, home);
+  // Lo que el plan no incluye no aparece; una sección que queda vacía tampoco.
+  return sections
+    .map((s) => ({ ...s, items: s.items.filter((i) => !(i as { hidden?: boolean }).hidden) }))
+    .filter((s) => s.items.length > 0);
+}
+
+function adminNav(base: string, plan: TenantPlan, home: NavSection): NavSection[] {
   return [
     home,
     {
@@ -71,10 +81,10 @@ function navFor(user: ChannelUser, base: string): NavSection[] {
         { to: `${base}/areas`, label: "Áreas", icon: "building" },
         { to: `${base}/categories`, label: "Categorías", icon: "grid" },
         { to: `${base}/portal`, label: "Portal del denunciante", icon: "external" },
-        { to: `${base}/branding`, label: "Marca", icon: "palette" },
-        { to: `${base}/mail`, label: "Correo saliente", icon: "mail" },
+        { to: `${base}/branding`, label: "Marca", icon: "palette", hidden: !planHas(plan, "branding") },
+        { to: `${base}/mail`, label: "Correo saliente", icon: "mail", hidden: !planHas(plan, "custom_smtp") },
         { to: `${base}/settings`, label: "Reglas de gestión", icon: "settings" },
-        { to: `${base}/flow-settings`, label: "Flujos de gestión", icon: "flow" },
+        { to: `${base}/flow-settings`, label: "Flujos de gestión", icon: "flow", hidden: !planHas(plan, "custom_flows") },
       ],
     },
     { title: "Control", items: [{ to: `${base}/audit`, label: "Auditoría", icon: "activity" }] },
@@ -88,7 +98,7 @@ export function ChannelLayout() {
   const navigate = useNavigate();
   const scope = tenantScope(slug);
   const [token, setTokenState] = useState(() => getToken(scope));
-  const [data, setData] = useState<{ user: ChannelUser; tenant: ChannelTenant } | null>(null);
+  const [data, setData] = useState<{ user: ChannelUser; tenant: ChannelTenant; plan: TenantPlan } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   const logout = useCallback(() => {
@@ -106,7 +116,7 @@ export function ChannelLayout() {
 
   useEffect(() => {
     if (!token) return logout();
-    api<{ user: ChannelUser; tenant: { name: string; slug: string } }>(`/t/${slug}/auth/me`, { token })
+    api<{ user: ChannelUser; tenant: ChannelTenant; plan: TenantPlan }>(`/t/${slug}/auth/me`, { token })
       .then(setData)
       .catch(logout);
   }, [slug, token, logout, reloadKey]);
@@ -125,6 +135,7 @@ export function ChannelLayout() {
   const context: ChannelContext = {
     user: data.user,
     tenant: data.tenant,
+    plan: data.plan,
     token,
     logout,
     updateToken,
@@ -136,11 +147,17 @@ export function ChannelLayout() {
 
   return (
     <ConsoleShell
-      nav={navFor(data.user, base)}
+      nav={navFor(data.user, base, data.plan)}
       caption={data.tenant.name}
       orgLogoUrl={data.tenant.branding?.logoUrl}
       style={brandStyle(data.tenant.branding?.primaryColor)}
       poweredBy
+      headerActions={
+        // Alertas de plazos para quienes tienen denuncias a su cargo.
+        data.user.activeRole === "case_manager" || data.user.activeRole === "investigator" ? (
+          <AlertsBell apiBase={`/t/${slug}`} token={token} basePath={base} />
+        ) : undefined
+      }
       user={data.user}
       roleLabel={ROLES[data.user.activeRole].label}
       accountPath={`${base}/account`}
@@ -163,6 +180,13 @@ export function ChannelLayout() {
 export function RequireChannelAdmin() {
   const context = useOutletContext<ChannelContext>();
   if (context.user.activeRole !== "client_admin") return <Navigate to={context.basePath} replace />;
+  return <Outlet context={context} />;
+}
+
+/** Vistas de un módulo que el plan de la empresa no incluye: vuelven al inicio (el backend igualmente las rechaza). */
+export function RequirePlanFeature({ feature }: { feature: PlanFeature }) {
+  const context = useOutletContext<ChannelContext>();
+  if (!planHas(context.plan, feature)) return <Navigate to={context.basePath} replace />;
   return <Outlet context={context} />;
 }
 

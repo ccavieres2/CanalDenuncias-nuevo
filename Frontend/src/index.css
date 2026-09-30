@@ -51,3 +51,31 @@ body {
     scroll-padding-bottom: 6rem;
   }
 }
+
+/*
+ * Barra de desplazamiento del menú lateral: fina, sin flechas y con los colores de la marca de la empresa
+ * (--color-nav y --color-nav-accent, que brandStyle sobrescribe). Discreta en reposo; más visible al pasar el mouse.
+ */
+@utility scrollbar-nav {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-nav-accent) 22%, transparent) transparent;
+  &:hover {
+    scrollbar-color: color-mix(in srgb, var(--color-nav-accent) 45%, transparent) transparent;
+  }
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background-color: color-mix(in srgb, var(--color-nav-accent) 22%, transparent);
+  }
+  &:hover::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--color-nav-accent) 45%, transparent);
+  }
+  &::-webkit-scrollbar-button {
+    display: none;
+  }
+}

@@ -9,7 +9,13 @@ import { FullPageSpinner } from "./ui";
 
 const NAV: NavSection[] = [
   { title: "General", items: [{ to: "/admin/overview", label: "Resumen", icon: "grid" }] },
-  { title: "Plataforma", items: [{ to: "/admin/tenants", label: "Empresas", icon: "building" }] },
+  {
+    title: "Plataforma",
+    items: [
+      { to: "/admin/tenants", label: "Empresas", icon: "building" },
+      { to: "/admin/plans", label: "Planes", icon: "archive" },
+    ],
+  },
   {
     title: "Administración",
     items: [

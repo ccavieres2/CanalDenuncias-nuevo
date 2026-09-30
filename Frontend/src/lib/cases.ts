@@ -272,10 +272,23 @@ export interface CaseOptions {
   milestoneResults: Record<string, string[]>;
 }
 
+/** Evidencia adjuntada por el denunciante. Para el auditor: sin nombre, tipo ni huella. */
+export interface CaseFile {
+  id: string;
+  name: string;
+  mime: string | null;
+  sizeBytes: number;
+  sha256: string | null;
+  sender: "reporter" | "staff";
+  createdAt: string;
+}
+
 export interface CaseResponse {
   case: CaseDetail;
   events: CaseEvent[];
   messages: CaseMessage[];
+  files: CaseFile[];
+  canDownloadFiles: boolean;
   options: CaseOptions | null;
 }
 

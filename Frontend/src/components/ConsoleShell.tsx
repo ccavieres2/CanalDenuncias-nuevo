@@ -8,7 +8,8 @@ type IconName = Parameters<typeof Icon>[0]["name"];
 
 export interface NavSection {
   title: string;
-  items: { to: string; label: string; icon: IconName; end?: boolean }[];
+  /** hidden: el ítem no se muestra (por ejemplo, un módulo que el plan de la empresa no incluye). */
+  items: { to: string; label: string; icon: IconName; end?: boolean; hidden?: boolean }[];
 }
 
 /** Roles entre los que la persona puede cambiar (solo si tiene más de uno). */
@@ -34,6 +35,8 @@ interface ShellProps {
   style?: CSSProperties;
   /** Panel de una empresa: al pie del menú va «Powered by BeeHives» en vez de la cuenta del usuario. */
   poweredBy?: boolean;
+  /** Acciones junto al menú de usuario (p. ej., la campana de alertas). */
+  headerActions?: ReactNode;
   children: ReactNode;
 }
 
@@ -52,6 +55,7 @@ export function ConsoleShell({
   orgLogoUrl,
   style,
   poweredBy,
+  headerActions,
   children,
 }: ShellProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -139,7 +143,10 @@ export function ConsoleShell({
           ) : (
             <span className="hidden lg:block" />
           )}
-          <UserMenu user={user} roleLabel={roleLabel} accountPath={accountPath} onLogout={onLogout} roleSwitch={roleSwitch} />
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+            {headerActions}
+            <UserMenu user={user} roleLabel={roleLabel} accountPath={accountPath} onLogout={onLogout} roleSwitch={roleSwitch} />
+          </div>
         </header>
 
         <main className="px-4 py-6 sm:px-6 sm:py-8 lg:px-8 xl:px-10">
@@ -170,7 +177,7 @@ function Sidebar({
         <Brand stacked caption={caption} logoUrl={orgLogoUrl} />
       </div>
 
-      <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
+      <nav className="scrollbar-nav flex-1 space-y-6 overflow-y-auto px-3 py-5">
         {nav.map((section) => (
           <div key={section.title}>
             <p className="px-3 pb-2 text-[11px] font-semibold tracking-[0.08em] text-white/35 uppercase">{section.title}</p>

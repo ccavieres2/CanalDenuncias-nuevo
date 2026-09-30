@@ -27,6 +27,8 @@ export interface Tenant extends TenantProfile {
   name: string;
   slug: string;
   status: TenantStatus;
+  /** Plan comercial (ver Planes en la consola). */
+  planId: string;
   dbName: string;
   createdAt: string;
   updatedAt: string;

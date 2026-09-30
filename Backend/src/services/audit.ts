@@ -21,6 +21,10 @@ export type AuditAction =
   | "tenant.updated"
   | "tenant.suspended"
   | "tenant.reactivated"
+  | "tenant.plan_changed"
+  | "plan.created"
+  | "plan.updated"
+  | "plan.deleted"
   | "client_admin.created"
   | "client_admin.deactivated"
   | "client_admin.reactivated"
@@ -49,6 +53,7 @@ export type AuditAction =
   | "area.deleted"
   | "area.categories_updated"
   | "case.viewed"
+  | "case.file_downloaded"
   | "case.start_review"
   | "case.reclassify"
   | "case.involve"
@@ -73,7 +78,7 @@ export type AuditAction =
 
 export interface AuditInput {
   action: AuditAction;
-  targetType?: "tenant" | "client_admin" | "global_admin" | "user" | "category" | "settings" | "area" | "case";
+  targetType?: "tenant" | "plan" | "client_admin" | "global_admin" | "user" | "category" | "settings" | "area" | "case";
   targetId?: string;
   targetLabel?: string;
   tenantSlug?: string;

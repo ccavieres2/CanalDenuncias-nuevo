@@ -1,10 +1,11 @@
-import { type Request, Router } from "express";
+import express, { type Request, Router } from "express";
 import { createHmac, randomBytes } from "node:crypto";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { HttpError } from "../errors.js";
 import { publicBranding, readLogo } from "../services/branding.js";
 import { signReporterToken, verifyReporterToken } from "../services/auth.js";
+import { addReporterFile } from "../services/case-files.js";
 import {
   addReporterMessage,
   authenticateByAuthenticator,
@@ -130,6 +131,34 @@ publicRouter.post("/track/messages", trackLimiter, async (req, res) => {
     .parse(req.body);
   await addReporterMessage(req.tenant!, caseId, body);
   res.status(201).json(await withSession(req.tenant, caseId));
+});
+
+/* ---------- Archivos (evidencias) del denunciante */
+
+// Suficiente para adjuntar evidencias sin permitir llenar el almacenamiento desde una conexión.
+const uploadLimiter = limiter(30, 60, "Subiste demasiados archivos. Intenta nuevamente en una hora.");
+// Cuerpo binario (no base64). El límite real por archivo (10 MB) lo valida el servicio; aquí se corta antes.
+const rawFile = express.raw({ type: "application/octet-stream", limit: "11mb" });
+
+/**
+ * El archivo viaja como cuerpo binario; la sesión y el nombre van en cabeceras (el nombre codificado con
+ * encodeURIComponent). Como en el resto del portal, no se registra IP ni dispositivo, ni se audita.
+ */
+publicRouter.post("/track/files", uploadLimiter, rawFile, async (req, res) => {
+  const { session, name } = z
+    .object({ session: z.string().min(10).max(2000), name: z.string().min(1).max(600) })
+    .parse({ session: req.get("x-reporter-session"), name: req.get("x-file-name") });
+  const payload = verifyReporterToken(session, req.tenant!.slug);
+  if (!payload) throw new HttpError(401, "Tu sesión expiró. Vuelve a ingresar.");
+  if (!Buffer.isBuffer(req.body)) throw new HttpError(415, "Envía el archivo como application/octet-stream.");
+  let fileName: string;
+  try {
+    fileName = decodeURIComponent(name);
+  } catch {
+    throw new HttpError(400, "Nombre de archivo inválido.");
+  }
+  await addReporterFile(req.tenant!, payload.sub, fileName, req.body);
+  res.status(201).json(await withSession(req.tenant, payload.sub));
 });
 
 /* ---------- App de autenticación del denunciante (opcional) */

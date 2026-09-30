@@ -98,6 +98,7 @@ export function ChannelAreasPage() {
       {permissions && (
         <AreaCategoriesModal
           area={permissions}
+          areaNames={new Map((areas ?? []).map((a) => [a.id, a.name]))}
           onClose={() => setPermissions(null)}
           onSaved={(summary) => {
             setPermissions(null);
@@ -188,10 +189,12 @@ function AreaModal({
  */
 function AreaCategoriesModal({
   area,
+  areaNames,
   onClose,
   onSaved,
 }: {
   area: Area;
+  areaNames: Map<string, string>;
   onClose: () => void;
   onSaved: (summary: string) => void;
 }) {
@@ -236,7 +239,7 @@ function AreaCategoriesModal({
     <Modal
       size="lg"
       title={`Categorías autorizadas: ${area.name}`}
-      description="Marca las denuncias que las personas de esta área pueden tener a cargo."
+      description="Denuncias que las personas de esta área pueden tener a cargo."
       onClose={onClose}
       footer={
         <>
@@ -267,15 +270,18 @@ function AreaCategoriesModal({
                   {items.map((c) => {
                     const open = c.area_ids.length === 0;
                     const onlyThis = c.area_ids.length === 1 && c.area_ids[0] === area.id;
-                    const locked = open || onlyThis;
+                    // Reservada a otras áreas: solo se autoriza desde Categorías.
+                    const reserved = !open && !c.area_ids.includes(area.id);
+                    const locked = open || onlyThis || reserved;
                     return (
                       <li key={c.id}>
                         <label
                           className={`flex items-start gap-2.5 text-sm ${locked ? "text-gray-500" : "cursor-pointer text-gray-800"}`}
                         >
+                          {/* Las categorías sin áreas asignadas se ven desmarcadas: no es un permiso dado a esta área. */}
                           <input
                             type="checkbox"
-                            checked={open || selected.includes(c.id)}
+                            checked={!open && selected.includes(c.id)}
                             disabled={locked}
                             onChange={() => toggle(c.id)}
                             className="mt-0.5 size-4 shrink-0 rounded accent-brand-navy"
@@ -284,7 +290,11 @@ function AreaCategoriesModal({
                             {c.name}
                             {locked && (
                               <span className="mt-0.5 block text-xs text-gray-400">
-                                {open ? "Abierta a todas las áreas" : "Única área autorizada"}
+                                {open
+                                  ? "Sin áreas asignadas: se configura en Categorías"
+                                  : reserved
+                                    ? `Reservada a ${c.area_ids.map((id) => areaNames.get(id) ?? "otra área").join(", ")}`
+                                    : "Única área autorizada"}
                               </span>
                             )}
                           </span>
@@ -298,7 +308,8 @@ function AreaCategoriesModal({
           })
         )}
         <p className="text-xs leading-relaxed text-gray-500">
-          Las categorías abiertas a todas las áreas se restringen desde <strong>Categorías</strong>. Si quitas una
+          Qué áreas pueden tener cada categoría se define en <strong>Categorías</strong>; aquí solo puedes quitarle
+          categorías a esta área. Si quitas una
           categoría, las personas de esta área que la tenían asignada dejan de tenerla.
         </p>
       </div>

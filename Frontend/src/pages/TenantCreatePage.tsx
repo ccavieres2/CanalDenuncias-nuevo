@@ -1,7 +1,9 @@
 import { type FormEvent, type ReactNode, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Alert, Breadcrumbs, Button, Field, Icon, PageHeader, Panel, TextArea } from "../components/ui";
+import { PlanPicker } from "../components/PlanPicker";
 import { useAdmin } from "../lib/admin-context";
+import { usePlans } from "../lib/plans";
 import { ApiError, api } from "../lib/api";
 import type { Credentials, Tenant } from "../lib/types";
 import { buttonClass, initials } from "../lib/ui-helpers";
@@ -28,6 +30,8 @@ export function TenantCreatePage() {
   const [adminName, setAdminName] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
   const [profile, setProfile] = useState(EMPTY_PROFILE);
+  const [planId, setPlanId] = useState("");
+  const { plans, error: plansError } = usePlans(token, logout);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -43,7 +47,7 @@ export function TenantCreatePage() {
       const res = await api<{ tenant: Tenant; credentials: Credentials }>("/admin/tenants", {
         method: "POST",
         token,
-        body: { name, slug, ...profile, admin: { name: adminName, email: adminEmail } },
+        body: { name, slug, planId, ...profile, admin: { name: adminName, email: adminEmail } },
       });
       navigate(`/admin/tenants/${res.tenant.slug}`, {
         state: { flash: `La empresa "${res.tenant.name}" se creó correctamente.`, credentials: res.credentials },
@@ -76,6 +80,7 @@ export function TenantCreatePage() {
         {/* Formulario */}
         <div className="min-w-0 space-y-6">
           {error && <Alert>{error}</Alert>}
+          {plansError && <Alert>{plansError}</Alert>}
 
           <div className="grid items-start gap-6 2xl:grid-cols-2">
             <Panel title="Datos de la empresa" description="Cómo se identificará la organización en la plataforma.">
@@ -136,6 +141,15 @@ export function TenantCreatePage() {
                 </p>
               </div>
             </Panel>
+
+            <div className="2xl:col-span-2">
+              <Panel
+                title="Plan"
+                description="Define qué marcos legales, módulos y límites tendrá la empresa. Se puede cambiar después."
+              >
+                <PlanPicker plans={plans} value={planId} onChange={setPlanId} error={fields.planId} />
+              </Panel>
+            </div>
 
             <div className="2xl:col-span-2">
               <Panel

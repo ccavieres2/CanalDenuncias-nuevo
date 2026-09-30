@@ -16,6 +16,7 @@ export function ChannelCategoriesPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [editing, setEditing] = useState<Category | "new" | null>(null);
   const [areas, setAreas] = useState<Area[]>([]);
+  const [section, setSection] = useState<LegalFramework | null>(null);
 
   useEffect(() => {
     const onError = (err: unknown) => {
@@ -98,6 +99,12 @@ export function ChannelCategoriesPage() {
                   </span>
                 }
                 description={FRAMEWORKS[fw].description}
+                actions={
+                  <RowMenu
+                    label={`Acciones para ${FRAMEWORKS[fw].label}`}
+                    actions={[{ label: "Áreas autorizadas para toda la sección", onSelect: () => setSection(fw) }]}
+                  />
+                }
               >
                 <ul className="divide-y divide-line-soft">
                   {items.map((c) => (
@@ -162,7 +169,143 @@ export function ChannelCategoriesPage() {
           }}
         />
       )}
+
+      {section && categories && (
+        <SectionAreasModal
+          framework={section}
+          categories={categories.filter((c) => c.legal_framework === section)}
+          areas={areas}
+          onClose={() => setSection(null)}
+          onSaved={(summary) => {
+            setSection(null);
+            setFlash(summary);
+            reload();
+          }}
+          onPartial={(message) => {
+            setSection(null);
+            setError(message);
+            reload();
+          }}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * Autoriza las mismas áreas en todas las categorías de un marco legal. Reutiliza la edición de cada
+ * categoría (PATCH), así cada cambio queda auditado y quita la categoría a quienes pierden la autorización.
+ */
+function SectionAreasModal({
+  framework,
+  categories,
+  areas,
+  onClose,
+  onSaved,
+  onPartial,
+}: {
+  framework: LegalFramework;
+  categories: Category[];
+  areas: Area[];
+  onClose: () => void;
+  onSaved: (summary: string) => void;
+  onPartial: (message: string) => void;
+}) {
+  const { token, apiBase } = useChannel();
+  // Punto de partida: las áreas que ya comparten todas las categorías de la sección.
+  const common = areas.filter((a) => categories.every((c) => c.area_ids.includes(a.id))).map((a) => a.id);
+  const uniform = categories.every(
+    (c) => c.area_ids.length === categories[0]!.area_ids.length && c.area_ids.every((id) => common.includes(id)),
+  );
+  const [restricted, setRestricted] = useState(categories.some((c) => c.area_ids.length > 0));
+  const [areaIds, setAreaIds] = useState<string[]>(common);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function save() {
+    setError(null);
+    if (restricted && !areaIds.length) {
+      setError("Selecciona al menos un área autorizada o permite cualquier área.");
+      return;
+    }
+    setLoading(true);
+    const next = restricted ? areaIds : [];
+    const pending = categories.filter(
+      (c) => c.area_ids.length !== next.length || !c.area_ids.every((id) => next.includes(id)),
+    );
+    const done: string[] = [];
+    for (const c of pending) {
+      try {
+        await api(`${apiBase}/console/categories/${c.id}`, { method: "PATCH", token, body: { areaIds: next } });
+        done.push(c.name);
+      } catch (err) {
+        const reason = err instanceof ApiError ? err.message : "Error inesperado";
+        if (!done.length) {
+          setError(reason);
+          setLoading(false);
+          return;
+        }
+        return onPartial(`Se actualizaron ${done.join(", ")}, pero falló "${c.name}": ${reason}`);
+      }
+    }
+    onSaved(done.length ? `${FRAMEWORKS[framework].label}: se actualizaron ${done.length} categorías.` : "No hubo cambios.");
+  }
+
+  return (
+    <Modal
+      size="lg"
+      title={`Áreas autorizadas: ${FRAMEWORKS[framework].label}`}
+      description={`Se aplicará a las ${categories.length} categorías de esta sección.`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="link" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button variant="primary" loading={loading} onClick={save}>
+            Aplicar a la sección
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {error && <Alert>{error}</Alert>}
+        {!uniform && (
+          <Alert type="info">
+            Hoy las categorías de esta sección tienen áreas distintas. Al guardar, todas quedarán con las áreas que marques
+            aquí.
+          </Alert>
+        )}
+        <div className="space-y-3 rounded-lg bg-gray-50 p-4 ring-1 ring-gray-200/70 ring-inset">
+          <Toggle
+            label="Restringir a áreas específicas"
+            description="Si no lo activas, cualquier área podrá tener a cargo las categorías de esta sección."
+            checked={restricted}
+            onChange={setRestricted}
+          />
+          {restricted && (
+            <div className="grid gap-2 pt-1 sm:grid-cols-2">
+              {areas.map((a) => (
+                <label key={a.id} className="flex cursor-pointer items-center gap-2.5 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={areaIds.includes(a.id)}
+                    onChange={() =>
+                      setAreaIds((ids) => (ids.includes(a.id) ? ids.filter((x) => x !== a.id) : [...ids, a.id]))
+                    }
+                    className="size-4 rounded accent-brand-navy"
+                  />
+                  {a.name}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        <p className="text-xs text-gray-500">
+          Si quitas un área, sus personas dejarán de tener a cargo las categorías de esta sección.
+        </p>
+      </div>
+    </Modal>
   );
 }
 
@@ -177,10 +320,14 @@ function CategoryModal({
   onClose: () => void;
   onSaved: (category: Category, created: boolean) => void;
 }) {
-  const { token, apiBase } = useChannel();
+  const { token, apiBase, plan } = useChannel();
+  // Solo los marcos legales que incluye el plan de la empresa.
+  const frameworks = FRAMEWORK_ORDER.filter((fw) => plan.frameworks.includes(fw));
   const [name, setName] = useState(category?.name ?? "");
   const [description, setDescription] = useState(category?.description ?? "");
-  const [framework, setFramework] = useState<LegalFramework>(category?.legal_framework ?? "internal");
+  const [framework, setFramework] = useState<LegalFramework>(
+    category?.legal_framework ?? (frameworks.includes("internal") ? "internal" : frameworks[0]!),
+  );
   const [areaIds, setAreaIds] = useState<string[]>(category?.area_ids ?? []);
   const [restricted, setRestricted] = useState((category?.area_ids.length ?? 0) > 0);
   const [error, setError] = useState<string | null>(null);
@@ -239,7 +386,7 @@ function CategoryModal({
         <fieldset>
           <legend className="text-sm font-medium text-gray-800">Marco legal</legend>
           <div className="mt-2 space-y-2">
-            {FRAMEWORK_ORDER.map((fw) => (
+            {frameworks.map((fw) => (
               <label
                 key={fw}
                 className={`flex cursor-pointer items-start gap-3 rounded-lg p-3 ring-1 transition ring-inset ${

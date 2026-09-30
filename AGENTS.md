@@ -124,6 +124,9 @@ involucrado en un caso (conflicto de interés) no lo ve con ningún rol.
 9. **Auditoría:** toda acción administrativa y todo acceso a una denuncia se registra (`audit()`); cada acción de
    un caso deja evento en `case_events`.
 10. Cambios de flujo de empresa aplican solo a denuncias **nuevas** (versión guardada en `cases.flow_template_id`).
+11. **Plan de la empresa** (`services/plans.ts`): todo módulo, marco legal o límite nuevo se verifica en el backend
+    (`requireFeature` / `requireFramework` / `requireBelowLimit`) y se oculta en el frontend (`planHas`). Cambiar de
+    plan nunca borra datos ni bloquea la gestión de denuncias en curso.
 
 ## Convenciones
 

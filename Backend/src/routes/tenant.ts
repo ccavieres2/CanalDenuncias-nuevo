@@ -5,6 +5,7 @@ import { findAccount } from "../services/accounts.js";
 import { TENANT_ROLES } from "../services/auth.js";
 import { effectiveCategories, getUser, hasScopedRole, listCategories } from "../services/channel.js";
 import { publicBranding } from "../services/branding.js";
+import { planForClient, planOf } from "../services/plans.js";
 import { findTenantBySlug, tenantAccounts } from "../services/tenants.js";
 import { authFlowRouter } from "./auth-flow.js";
 import { casesRouter } from "./cases.js";
@@ -42,10 +43,11 @@ tenantRouter.use(
 // Responde aunque haya un cambio de contraseña pendiente, para que el frontend lo sepa.
 tenantRouter.get("/auth/me", requireRole(TENANT_ROLES, { allowPendingPasswordChange: true }), async (req, res) => {
   const tenant = req.tenant!;
-  const [account, user, categories] = await Promise.all([
+  const [account, user, categories, plan] = await Promise.all([
     findAccount(tenantAccounts(tenant), req.actor!.id),
     getUser(tenant, req.actor!.id),
     listCategories(tenant),
+    planOf(tenant),
   ]);
   res.json({
     user: {
@@ -66,6 +68,8 @@ tenantRouter.get("/auth/me", requireRole(TENANT_ROLES, { allowPendingPasswordCha
       passwordChangedAt: account!.password_changed_at,
     },
     tenant: { name: tenant.name, slug: tenant.slug, branding: await publicBranding(tenant) },
+    // El panel oculta lo que el plan no incluye (el backend además lo rechaza).
+    plan: planForClient(plan),
   });
 });
 

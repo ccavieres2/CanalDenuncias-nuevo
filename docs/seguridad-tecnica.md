@@ -129,6 +129,11 @@ Aplica igual a la consola de la plataforma (global_admin) y al panel de cada emp
 
 ---
 
+- **Plan de la empresa** (`services/plans.ts`): cada ruta que crea o configura algo sujeto al plan lo verifica en el
+  servidor (`requireFeature`, `requireFramework`, `requireBelowLimit`); el frontend solo lo oculta. El plan se lee en
+  cada petición, así que un cambio aplica de inmediato. Bajar de plan no borra datos ni corta la gestión de denuncias
+  en curso (plazos legales).
+
 ## 6. Denunciante: anonimato y acceso a su denuncia
 
 **Anonimato** (`Backend/src/routes/public.ts`, `Frontend/index.html`) — *verificado de extremo a extremo*
@@ -180,6 +185,15 @@ producción no. `X-Powered-By` y la versión de nginx no se exponen.
 - **Validación de entrada** con esquemas (zod) en todas las rutas; tamaño máximo de petición 100 KB (450 KB solo
   para el logo). Un exceso responde 413 sin afectar el servidor.
 - **Archivos subidos (logo):** se valida el tipo real por su contenido (no por la extensión), máximo 300 KB.
+- **Evidencias del denunciante** (`services/case-files.ts`): lista cerrada de formatos, con la extensión y la firma
+  del contenido que deben coincidir (sin ejecutables, HTML ni SVG); máximo 10 MB por archivo (nginx admite 11 MB solo
+  en esa ruta), 20 archivos y 100 MB por denuncia, con la denuncia bloqueada (`FOR UPDATE`) al validar los límites.
+  El nombre se limpia de rutas y caracteres de control; la clave de almacenamiento se genera en el servidor
+  (`caseFileKey` + `assertSafeKey`). Límite de 30 subidas por hora por conexión (huella en memoria, sin guardar la IP).
+  La descarga exige ver la denuncia con el rol activo y un rol con acceso al contenido (el auditor no descarga), se
+  entrega como `attachment` con `nosniff` y `no-store`, y queda auditada. Se guarda la huella SHA-256 de cada archivo.
+  Pendiente: análisis antivirus y eliminación de metadatos (EXIF) de las fotos; el portal advierte al denunciante
+  anónimo que revise que sus archivos no lo identifiquen.
 - **Errores:** no se devuelven trazas ni detalles internos al usuario.
 
 ---
@@ -284,8 +298,8 @@ Pruebas automatizadas (API y navegador real) ejecutadas sobre empresas temporale
 
 **A futuro**
 4. **Límite de intentos compartido** (por ejemplo, Redis): hoy vive en la memoria de cada instancia del backend.
-5. **Evidencias adjuntas** (aún no implementadas): al agregarlas, eliminar metadatos (EXIF/GPS) y analizarlas con
-   antivirus.
+5. **Evidencias adjuntas** (implementadas; ver sección 7): falta eliminar metadatos (EXIF/GPS) de las fotos y
+   analizarlas con antivirus (por ejemplo, ClamAV o Amazon GuardDuty Malware Protection for S3).
 6. **Pruebas automáticas en el repositorio** y escaneo de dependencias (`npm audit`, Dependabot) en CI.
 7. **Revocación de sesiones por lista** (cerrar sesión en todos los dispositivos sin cambiar la contraseña).
 8. **OAuth2 para SMTP** (Microsoft 365 / Google) en lugar de contraseñas de aplicación.

@@ -29,6 +29,12 @@ export function initials(name: string): string {
     .join("");
 }
 
+/** Tamaño de archivo legible: 850 KB, 3,4 MB. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toLocaleString("es-CL", { maximumFractionDigits: 1 })} MB`;
+}
+
 export function formatDate(value: string | null, withTime = false): string {
   if (!value) return "—";
   return new Date(value).toLocaleString("es-CL", {

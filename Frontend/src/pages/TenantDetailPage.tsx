@@ -20,7 +20,9 @@ import {
   td,
   th,
 } from "../components/ui";
+import { PlanPicker, PlanSummary } from "../components/PlanPicker";
 import { useAdmin } from "../lib/admin-context";
+import { type Plan, usePlans } from "../lib/plans";
 import { ApiError, api } from "../lib/api";
 import type { AuditEvent, ClientAdmin, Credentials, Tenant, TenantProfile } from "../lib/types";
 import { buttonClass, formatDate, initials } from "../lib/ui-helpers";
@@ -54,6 +56,9 @@ export function TenantDetailPage() {
   const [addingAdmin, setAddingAdmin] = useState(false);
   const [editing, setEditing] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
+  const [changingPlan, setChangingPlan] = useState(false);
+  const { plans } = usePlans(token, logout);
+  const plan = plans?.find((p) => p.id === tenant?.planId);
 
   useEffect(() => {
     const onError = (err: unknown) => {
@@ -165,6 +170,17 @@ export function TenantDetailPage() {
       <div className="grid items-start gap-6 xl:grid-cols-[360px_minmax(0,1fr)] 2xl:grid-cols-[400px_minmax(0,1fr)]">
         {/* Columna izquierda: ficha */}
         <div className="space-y-6">
+          <Panel
+            title={plan ? `Plan ${plan.name}` : "Plan"}
+            actions={
+              <Button onClick={() => setChangingPlan(true)} disabled={!tenant || !plans}>
+                Cambiar plan
+              </Button>
+            }
+          >
+            {plan ? <PlanSummary plan={plan} /> : <p className="text-sm text-gray-500">Cargando…</p>}
+          </Panel>
+
           <Panel
             title="Información comercial"
             actions={
@@ -352,6 +368,20 @@ export function TenantDetailPage() {
         />
       )}
 
+      {changingPlan && tenant && plans && (
+        <ChangePlanModal
+          tenant={tenant}
+          plans={plans}
+          onClose={() => setChangingPlan(false)}
+          onSaved={(t, planName) => {
+            setChangingPlan(false);
+            setTenant(t);
+            setFlash(`La empresa ahora tiene el plan ${planName}.`);
+            reload();
+          }}
+        />
+      )}
+
       {editing && tenant && (
         <EditProfileModal
           token={token}
@@ -472,6 +502,67 @@ export function TenantDetailPage() {
         </ConfirmModal>
       )}
     </>
+  );
+}
+
+/**
+ * Cambio de plan. Aplica de inmediato y no borra nada: lo que el plan nuevo no incluye deja de mostrarse y de poder
+ * crearse, pero lo existente se conserva.
+ */
+function ChangePlanModal({
+  tenant,
+  plans,
+  onClose,
+  onSaved,
+}: {
+  tenant: Tenant;
+  plans: Plan[];
+  onClose: () => void;
+  onSaved: (tenant: Tenant, planName: string) => void;
+}) {
+  const { token } = useAdmin();
+  const [planId, setPlanId] = useState(tenant.planId);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function save() {
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await api<{ tenant: Tenant }>(`/admin/tenants/${tenant.slug}`, { method: "PATCH", token, body: { planId } });
+      onSaved(res.tenant, plans.find((p) => p.id === planId)?.name ?? "");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Error inesperado");
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Modal
+      size="lg"
+      title={`Plan de ${tenant.name}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="link" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button variant="primary" loading={loading} onClick={save} disabled={planId === tenant.planId}>
+            Cambiar plan
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-5">
+        {error && <Alert>{error}</Alert>}
+        <PlanPicker plans={plans} value={planId} onChange={setPlanId} />
+        <Alert type="info">
+          El cambio aplica de inmediato y no borra nada. Si el plan nuevo incluye menos, lo que queda fuera deja de
+          mostrarse y no se puede crear de nuevo (por ejemplo, usuarios sobre el límite o denuncias de otro marco legal),
+          pero se conservan los usuarios, las categorías y las denuncias en curso con sus plazos legales.
+        </Alert>
+      </div>
+    </Modal>
   );
 }
 

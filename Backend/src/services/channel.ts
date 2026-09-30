@@ -2,6 +2,7 @@ import type pg from "pg";
 import { HttpError, isUniqueViolation } from "../errors.js";
 import { type TenantRole, hashPassword } from "./auth.js";
 import { generateTemporaryPassword } from "./passwords.js";
+import { hasFramework, planOf } from "./plans.js";
 import { type IssuedCredentials, type Tenant, tenantPool } from "./tenants.js";
 
 /**
@@ -195,9 +196,9 @@ export async function deleteArea(tenant: Tenant, id: string): Promise<string> {
 }
 
 /**
- * Define, desde el área, qué categorías restringidas puede tener a cargo. Es la misma
- * relación que se edita desde cada categoría (category_areas), vista desde el otro lado.
- * Las categorías abiertas a cualquier área no se tocan aquí: se restringen desde Categorías.
+ * Ajusta, desde el área, las categorías restringidas que tiene a cargo (category_areas). Solo permite
+ * quitar: autorizar un área nueva en una categoría es decisión de Categorías, que define la exclusividad.
+ * Las categorías abiertas a cualquier área tampoco se tocan aquí.
  */
 export async function setAreaCategories(
   tenant: Tenant,
@@ -220,8 +221,11 @@ export async function setAreaCategories(
     for (const c of restricted) {
       const has = c.area_ids.includes(areaId);
       if (wanted.has(c.id) && !has) {
-        await db.query("INSERT INTO category_areas (category_id, area_id) VALUES ($1, $2)", [c.id, areaId]);
-        added.push(c.name);
+        // La exclusividad se define en Categorías: desde el área no se puede sumar a una categoría reservada a otras.
+        throw new HttpError(
+          403,
+          `"${c.name}" está reservada a otras áreas. Para autorizar a ${area.name}, edítala desde Categorías.`,
+        );
       } else if (!wanted.has(c.id) && has) {
         // Quitar la última área dejaría la categoría abierta a todas: no se permite.
         if (c.area_ids.length === 1) {
@@ -538,7 +542,14 @@ export async function saveSetting(tenant: Tenant, key: "portal" | "case_rules" |
 
 /** Datos del inicio del client_admin: equipo, cobertura de categorías y puesta en marcha. */
 export async function getChannelOverview(tenant: Tenant) {
-  const [users, categories, settings] = await Promise.all([listUsers(tenant), listCategories(tenant), getSettings(tenant)]);
+  const [users, allCategories, settings, plan] = await Promise.all([
+    listUsers(tenant),
+    listCategories(tenant),
+    getSettings(tenant),
+    planOf(tenant),
+  ]);
+  // Solo cuentan las categorías de marcos que incluye el plan (las otras no se muestran ni reciben denuncias).
+  const categories = allCategories.filter((c) => hasFramework(plan, c.legal_framework));
   const active = users.filter((u) => u.is_active);
   const byRole = (role: TenantRole) => active.filter((u) => u.roles.includes(role)).length;
   const { mode, conflictPlan } = settings.caseRules;

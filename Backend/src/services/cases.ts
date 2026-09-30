@@ -14,6 +14,7 @@ import {
   listUsers,
 } from "./channel.js";
 import { addBusinessDays, addCalendarDays } from "./calendar.js";
+import { ALLOWED_EXTENSIONS, FILE_LIMITS, canUploadIn, listCaseFiles, readCaseFile, removeFilesOfCases } from "./case-files.js";
 import { type FlowTemplateRow, listTemplates, rulesOf, stampFlow } from "./flows.js";
 import {
   type CaseFlow,
@@ -31,6 +32,7 @@ import {
   nextDue,
   procedureFor,
 } from "./procedures.js";
+import { hasFeature, hasFramework, planOf, requireFeature, requireFramework } from "./plans.js";
 import { normalizeRut } from "./rut.js";
 import { decryptSecret, encryptSecret, sha256 } from "./secrets.js";
 import { type Tenant, tenantPool } from "./tenants.js";
@@ -516,7 +518,7 @@ export async function getVisibleCase(tenant: Tenant, userId: string, role: CaseR
   const { c, milestones } = await findVisibleCase(ctx, role, id, pool);
   const contentVisible = BASE_PERMISSIONS[role].viewContent;
 
-  const [events, messages] = await Promise.all([
+  const [events, messages, files] = await Promise.all([
     pool.query<EventRow>(
       "SELECT occurred_at, actor_label, actor_role, action, detail, kind FROM case_events WHERE case_id = $1 ORDER BY occurred_at, id",
       [id],
@@ -524,6 +526,7 @@ export async function getVisibleCase(tenant: Tenant, userId: string, role: CaseR
     contentVisible
       ? pool.query<MessageRow>("SELECT * FROM case_messages WHERE case_id = $1 ORDER BY created_at, id", [id])
       : Promise.resolve({ rows: [] as MessageRow[] }),
+    listCaseFiles(pool, id),
   ]);
 
   // Quien conversa con el denunciante deja leídos sus mensajes al abrir el caso.
@@ -558,8 +561,30 @@ export async function getVisibleCase(tenant: Tenant, userId: string, role: CaseR
       createdAt: m.created_at,
       readAt: m.read_at,
     })),
+    // Evidencias del denunciante. El auditor sabe que existen y cuándo llegaron, sin nombre ni acceso al contenido.
+    files: files.map((f, i) => ({
+      id: f.id,
+      name: contentVisible ? f.file_name : `Archivo ${i + 1} (reservado)`,
+      mime: contentVisible ? f.mime : null,
+      sizeBytes: f.size_bytes,
+      sha256: contentVisible ? f.sha256 : null,
+      sender: f.sender,
+      createdAt: f.created_at,
+    })),
+    canDownloadFiles: contentVisible,
     options,
   };
+}
+
+/**
+ * Descarga de una evidencia: exige ver la denuncia con el rol activo (mismas reglas que la ficha, incluido el
+ * conflicto de interés) y un rol con acceso al contenido. El auditor no descarga archivos.
+ */
+export async function getVisibleCaseFile(tenant: Tenant, userId: string, role: CaseRole, caseId: string, fileId: string) {
+  const ctx = await loadContext(tenant, userId);
+  const { c } = await findVisibleCase(ctx, role, caseId, tenantPool(tenant));
+  if (!BASE_PERMISSIONS[role].viewContent) throw new HttpError(403, "Tu rol no permite abrir las evidencias.");
+  return { code: c.code, ...(await readCaseFile(tenant, c.id, fileId)) };
 }
 
 /** Todos los plazos pendientes a cargo de la empresa en las denuncias abiertas que el rol puede ver. */
@@ -1135,10 +1160,11 @@ const ORIGIN_EVENT: Record<(typeof REGISTER_ORIGINS)[number], string> = {
 
 /** Categorías en que el gestor puede registrar denuncias (las que gestiona). */
 export async function registerOptions(tenant: Tenant, userId: string) {
+  const plan = await requireFeature(tenant, "register_cases");
   const ctx = await loadContext(tenant, userId);
   return {
     categories: ctx.categories
-      .filter((x) => x.is_active && ctx.myCategoryIds.has(x.id))
+      .filter((x) => x.is_active && ctx.myCategoryIds.has(x.id) && hasFramework(plan, x.legal_framework))
       .map((x) => ({ id: x.id, name: x.name, framework: x.legal_framework })),
   };
 }
@@ -1177,6 +1203,8 @@ export async function registerCase(tenant: Tenant, userId: string, raw: unknown)
   if (!category) fieldError("categoryId", "Selecciona la categoría");
   if (!ctx.myCategoryIds.has(category.id)) throw new HttpError(403, "No gestionas esa categoría: no podrías ver la denuncia.");
   const framework = category.legal_framework;
+  await requireFeature(tenant, "register_cases");
+  await requireFramework(tenant, framework);
   const karin = framework === "ley_karin";
   const fromDt = input.origin === "dt";
   const withReporter = REPORTER_ORIGINS.includes(input.origin);
@@ -1271,15 +1299,17 @@ const PUBLIC_STATUS: Record<CaseStatus, { label: string; description: string }> 
 };
 
 export async function getPublicPortal(tenant: Tenant) {
-  const [settings, categories] = await Promise.all([getSettings(tenant), listCategories(tenant)]);
+  const [settings, categories, plan] = await Promise.all([getSettings(tenant), listCategories(tenant), planOf(tenant)]);
   return {
     company: tenant.name,
     portal: settings.portal,
     retentionMonths: settings.caseRules.retentionMonths,
     relations: REPORTER_RELATIONS,
+    // Solo las categorías de los marcos legales que incluye el plan de la empresa.
     categories: categories
-      .filter((c) => c.is_active)
+      .filter((c) => c.is_active && hasFramework(plan, c.legal_framework))
       .map((c) => ({ id: c.id, name: c.name, description: c.description, framework: c.legal_framework, asksDetail: c.asks_detail })),
+    features: { authenticator: hasFeature(plan, "reporter_authenticator") },
   };
 }
 
@@ -1323,7 +1353,8 @@ export async function submitReport(tenant: Tenant, raw: unknown): Promise<{ id: 
   if (input.anonymous && !portal.allowAnonymous) {
     throw new HttpError(400, "Este canal requiere que te identifiques para recibir la denuncia.");
   }
-  const category = (await listCategories(tenant)).find((c) => c.id === input.categoryId && c.is_active);
+  const [categories, plan] = await Promise.all([listCategories(tenant), planOf(tenant)]);
+  const category = categories.find((c) => c.id === input.categoryId && c.is_active && hasFramework(plan, c.legal_framework));
   if (!category) throw new HttpError(400, "Selecciona de qué se trata");
   const identity = checkIdentity(input, category.legal_framework === "ley_karin");
   const karin = category.legal_framework === "ley_karin";
@@ -1471,9 +1502,11 @@ export async function authenticateByAuthenticator(tenant: Tenant, code: string, 
 export async function getReporterView(tenant: Tenant, caseId: string) {
   const c = await caseById(tenant, caseId);
   const pool = tenantPool(tenant);
-  const [category, messages] = await Promise.all([
+  const [category, messages, files, plan] = await Promise.all([
     pool.query<{ name: string }>("SELECT name FROM categories WHERE id = $1", [c.category_id]),
     pool.query<MessageRow>("SELECT * FROM case_messages WHERE case_id = $1 ORDER BY created_at, id", [c.id]),
+    listCaseFiles(pool, c.id),
+    planOf(tenant),
   ]);
   await pool.query("UPDATE case_messages SET read_at = now() WHERE case_id = $1 AND sender = 'staff' AND read_at IS NULL", [c.id]);
   return {
@@ -1497,6 +1530,13 @@ export async function getReporterView(tenant: Tenant, caseId: string) {
       // Para el denunciante: si el equipo ya leyó su mensaje.
       readAt: m.sender === "reporter" ? m.read_at : null,
     })),
+    // Sus propios archivos: los ve listados, pero no puede descargarlos ni borrarlos (quedan como evidencia).
+    files: files.map((f) => ({ id: f.id, name: f.file_name, sizeBytes: f.size_bytes, createdAt: f.created_at })),
+    // Módulos del plan: si no los incluye, el portal no los muestra (lo ya adjuntado se sigue listando).
+    evidenceEnabled: hasFeature(plan, "evidence"),
+    canUpload: hasFeature(plan, "evidence") && canUploadIn(c.status),
+    authenticatorAvailable: hasFeature(plan, "reporter_authenticator"),
+    fileLimits: { ...FILE_LIMITS, extensions: ALLOWED_EXTENSIONS, used: files.length },
   };
 }
 
@@ -1516,6 +1556,7 @@ export async function addReporterMessage(tenant: Tenant, caseId: string, body: s
  * La cuenta aparece en la app como «Seguimiento: DEN-AAAA-NNNN», sin el nombre del canal, por discreción.
  */
 export async function authenticatorSetup(tenant: Tenant, caseId: string) {
+  await requireFeature(tenant, "reporter_authenticator");
   const c = await caseById(tenant, caseId);
   if (c.totp_enabled_at) throw new HttpError(409, "Esta denuncia ya tiene una app de autenticación asociada.");
   const secret = generateTotpSecret();
@@ -1529,6 +1570,7 @@ export async function authenticatorSetup(tenant: Tenant, caseId: string) {
 }
 
 export async function authenticatorConfirm(tenant: Tenant, caseId: string, otp: string) {
+  await requireFeature(tenant, "reporter_authenticator");
   const c = await caseById(tenant, caseId);
   if (c.totp_enabled_at) throw new HttpError(409, "Esta denuncia ya tiene una app de autenticación asociada.");
   if (!c.totp_secret) throw new HttpError(400, "Primero escanea el código QR.");
@@ -1556,7 +1598,11 @@ export async function countDemoCases(tenant: Tenant): Promise<number> {
 }
 
 export async function clearDemoCases(tenant: Tenant): Promise<number> {
-  const res = await tenantPool(tenant).query("DELETE FROM cases WHERE is_demo");
+  const pool = tenantPool(tenant);
+  const ids = (await pool.query<{ id: string }>("SELECT id FROM cases WHERE is_demo")).rows.map((r) => r.id);
+  // Los archivos viven fuera de la base: se borran antes de que el CASCADE elimine sus registros.
+  await removeFilesOfCases(pool, ids);
+  const res = await pool.query("DELETE FROM cases WHERE is_demo");
   return res.rowCount ?? 0;
 }
 

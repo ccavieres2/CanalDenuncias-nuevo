@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { HttpError } from "../errors.js";
 import { requireRole } from "../middleware/auth.js";
+import { getAlerts } from "../services/alerts.js";
 import { audit, listAuditEvents } from "../services/audit.js";
 import {
   CASE_ACTIONS,
@@ -10,6 +11,7 @@ import {
   applyCaseAction,
   getChannelResources,
   getVisibleCase,
+  getVisibleCaseFile,
   listConversations,
   listDeadlines,
   listVisibleCases,
@@ -58,6 +60,11 @@ casesRouter.get("/deadlines", async (req, res) => {
   res.json({ deadlines: await listDeadlines(req.tenant!, req.actor!.id, roleOf(req.actor!.role)) });
 });
 
+/** Alertas de plazos vencidos o por vencer a cargo de la persona (campana del panel). */
+casesRouter.get("/alerts", async (req, res) => {
+  res.json(await getAlerts(req.tenant!, req.actor!.id, roleOf(req.actor!.role)));
+});
+
 /** Bandeja de conversaciones con denunciantes (gestor e investigador). */
 casesRouter.get("/messages", requireRole(["case_manager", "investigator"]), async (req, res) => {
   res.json({ conversations: await listConversations(req.tenant!, req.actor!.id, roleOf(req.actor!.role)) });
@@ -87,6 +94,33 @@ casesRouter.get("/:id", async (req, res) => {
     tenantSlug: req.tenant!.slug,
   });
   res.json(result);
+});
+
+/**
+ * Descarga de una evidencia del denunciante. Siempre como adjunto (nunca se muestra dentro de la app) y con el tipo
+ * validado al subirla; cada descarga queda en la auditoría.
+ */
+casesRouter.get("/:id/files/:fileId", async (req, res) => {
+  const id = caseId(req.params.id);
+  const fileId = z.uuid().safeParse(req.params.fileId);
+  if (!fileId.success) throw new HttpError(404, "Archivo no encontrado");
+  const { code, file, body } = await getVisibleCaseFile(req.tenant!, req.actor!.id, roleOf(req.actor!.role), id, fileId.data);
+  await audit(req, {
+    action: "case.file_downloaded",
+    targetType: "case",
+    targetId: id,
+    targetLabel: code,
+    tenantSlug: req.tenant!.slug,
+  });
+  const ascii = file.file_name.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  res.set({
+    "Content-Type": file.mime,
+    "Content-Length": String(body.length),
+    "Content-Disposition": `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.file_name)}`,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.send(body);
 });
 
 /** Acciones del flujo (asignar, diligencias, proponer, aprobar, mensajes…). El servicio valida rol y estado. */

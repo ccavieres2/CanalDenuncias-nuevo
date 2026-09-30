@@ -1243,6 +1243,7 @@ function ReportSent({
   basePath: string;
   apiBase: string;
 }) {
+  const { data } = usePortal();
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -1308,13 +1309,15 @@ function ReportSent({
           </span>
         </div>
 
-        <div className="mt-6">
-          <AuthenticatorSetup
-            apiBase={apiBase}
-            session={session}
-            caseCode={code}
-          />
-        </div>
+        {data.features.authenticator && (
+          <div className="mt-6">
+            <AuthenticatorSetup
+              apiBase={apiBase}
+              session={session}
+              caseCode={code}
+            />
+          </div>
+        )}
 
         <Link
           to={`${basePath}/seguimiento`}

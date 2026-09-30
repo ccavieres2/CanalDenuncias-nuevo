@@ -4,6 +4,7 @@ import express from "express";
 import { bootstrap } from "./bootstrap.js";
 import { config } from "./config.js";
 import { errorHandler } from "./errors.js";
+import { sendDeadlineReminders } from "./services/alerts.js";
 import { maintainAuditLog } from "./services/audit-maintenance.js";
 import { adminRouter } from "./routes/admin.js";
 import { tenantRouter } from "./routes/tenant.js";
@@ -46,3 +47,10 @@ const runAuditMaintenance = () =>
   maintainAuditLog().catch((err) => console.error("[auditoría] Falló el mantenimiento", err));
 void runAuditMaintenance();
 setInterval(runAuditMaintenance, 24 * 60 * 60 * 1000).unref();
+
+// Resumen diario de plazos por correo: se revisa cada hora y cada persona recibe como máximo uno al día (desde las
+// 8:00 de Chile). El registro en deadline_reminders evita duplicados entre ejecuciones e instancias.
+const runDeadlineReminders = () =>
+  sendDeadlineReminders().catch((err) => console.error("[alertas] Falló el envío de resúmenes de plazos", err));
+setTimeout(runDeadlineReminders, 60_000).unref();
+setInterval(runDeadlineReminders, 60 * 60 * 1000).unref();

@@ -24,6 +24,7 @@ import {
   dueState,
 } from "../../lib/cases";
 import { useChannel } from "../../lib/channel-context";
+import { planHas } from "../../lib/plans";
 import { FRAMEWORKS } from "../../lib/roles";
 import { buttonClass, formatDate } from "../../lib/ui-helpers";
 import { AssignFlow, QuickActionDialog } from "./AssignFlow";
@@ -51,7 +52,7 @@ const SCOPES: Record<
 
 /** Bandeja de denuncias. La misma vista para todos los roles; el contenido depende del rol activo. */
 export function CasesPage({ scope = "default" }: { scope?: CaseScope }) {
-  const { user, token, apiBase, basePath, logout } = useChannel();
+  const { user, plan, token, apiBase, basePath, logout } = useChannel();
   const role = user.activeRole as CaseRole;
   const view = scope === "default" ? CASE_VIEW[role] : SCOPES[scope];
   const inScope = (c: CaseSummary) =>
@@ -137,7 +138,7 @@ export function CasesPage({ scope = "default" }: { scope?: CaseScope }) {
         title={view.title}
         description={view.description}
         actions={
-          user.activeRole === "case_manager" && scope === "default" ? (
+          user.activeRole === "case_manager" && scope === "default" && planHas(plan, "register_cases") ? (
             <Link
               to={`${basePath}/cases/new`}
               className={buttonClass("primary", "w-full sm:w-auto")}

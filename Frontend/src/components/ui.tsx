@@ -104,6 +104,20 @@ const ICONS = {
   copy: <path d="M5.5 5.5v-3h8v8h-3M2.5 5.5h8v8h-8v-8Z" strokeLinejoin="round" />,
   download: <path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M2.5 13.5h11" strokeLinecap="round" strokeLinejoin="round" />,
   arrowLeft: <path d="M13 8H3M7 4 3 8l4 4" strokeLinecap="round" strokeLinejoin="round" />,
+  bell: (
+    <path
+      d="M4 6.5a4 4 0 0 1 8 0c0 3.5 1.5 4.5 1.5 4.5h-11S4 10 4 6.5ZM6.5 13.5a1.6 1.6 0 0 0 3 0"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  ),
+  paperclip: (
+    <path
+      d="m13 7.5-5.3 5.3a3 3 0 0 1-4.2-4.2l5.6-5.6a2 2 0 0 1 2.8 2.8L6.3 11.4a1 1 0 0 1-1.4-1.4l5-5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  ),
   key: <path d="M10 2.5a3.5 3.5 0 1 1-2.9 5.5L2.5 12.6v1h2v-1.5H6v-1.5h1.5l.5-.5A3.5 3.5 0 0 1 10 2.5ZM11 5.5h.01" strokeLinecap="round" strokeLinejoin="round" />,
   database: (
     <path

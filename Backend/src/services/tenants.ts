@@ -32,6 +32,8 @@ export interface Tenant extends TenantProfile {
   db_host: string;
   db_port: number;
   status: TenantStatus;
+  /** Plan comercial (base global, tabla plans). */
+  plan_id: string;
   created_at: Date;
   updated_at: Date;
 }
@@ -74,7 +76,7 @@ export const tenantAccounts = (t: Tenant): AccountStore => ({
   issuer: issuerFor(t.name),
 });
 
-const TENANT_COLUMNS = `id, name, slug, db_name, db_host, db_port, status, created_at, updated_at,
+const TENANT_COLUMNS = `id, name, slug, db_name, db_host, db_port, status, plan_id, created_at, updated_at,
   legal_name, tax_id, contact_name, contact_email, contact_phone, notes`;
 const CLIENT_ADMIN_COLUMNS = `id, email, name, 'client_admin' AS role, is_active, must_change_password, created_at, last_login_at,
   (totp_enabled_at IS NOT NULL) AS mfa_enabled`;
@@ -113,17 +115,18 @@ export async function getTenantOr404(slug: string): Promise<Tenant> {
  * con una contraseña temporal. Si algo falla a mitad de camino se deshace todo.
  */
 export async function createTenant(
-  input: { name: string; slug: string; admin: NewAccount } & TenantProfileInput,
+  input: { name: string; slug: string; planId: string; admin: NewAccount } & TenantProfileInput,
 ): Promise<{ tenant: Tenant; credentials: IssuedCredentials }> {
   if (RESERVED_SLUGS.has(input.slug)) throw new HttpError(409, `El slug "${input.slug}" está reservado`);
+  await assertActivePlan(input.planId);
 
   const dbName = config.tenantDbPrefix + input.slug.replace(/-/g, "_");
   let tenant: Tenant;
   try {
     const res = await globalPool.query<Tenant>(
       `INSERT INTO tenants (name, slug, db_name, db_host, db_port, status,
-                            legal_name, tax_id, contact_name, contact_email, contact_phone, notes)
-       VALUES ($1, $2, $3, $4, $5, 'provisioning', $6, $7, $8, $9, $10, $11)
+                            legal_name, tax_id, contact_name, contact_email, contact_phone, notes, plan_id)
+       VALUES ($1, $2, $3, $4, $5, 'provisioning', $6, $7, $8, $9, $10, $11, $12)
        RETURNING ${TENANT_COLUMNS}`,
       [
         input.name,
@@ -137,6 +140,7 @@ export async function createTenant(
         input.contactEmail ?? null,
         input.contactPhone ?? null,
         input.notes ?? null,
+        input.planId,
       ],
     );
     tenant = res.rows[0]!;
@@ -150,6 +154,15 @@ export async function createTenant(
     await createDatabase(tenant.db_host, tenant.db_port, tenant.db_name);
     databaseCreated = true;
     await runMigrations(tenantPool(tenant), TENANT_MIGRATIONS);
+    // Las migraciones crean áreas de ejemplo; la empresa parte solo con las que usan las categorías de los marcos
+    // legales de su plan (plan Básico: solo Recursos Humanos) y crea las demás si las necesita. Así no parte
+    // excedida si su plan limita las áreas. Si después se amplía el plan, applyDefaultAreas repone las necesarias.
+    await tenantPool(tenant).query(
+      `DELETE FROM areas a WHERE NOT EXISTS (
+         SELECT 1 FROM category_areas ca JOIN categories c ON c.id = ca.category_id
+          WHERE ca.area_id = a.id AND c.legal_framework = ANY($1::text[]))`,
+      [await planFrameworks(input.planId)],
+    );
     const { credentials } = await insertClientAdmin(tenant, input.admin);
 
     const res = await globalPool.query<Tenant>(
@@ -167,6 +180,73 @@ export async function createTenant(
     await globalPool.query("DELETE FROM tenants WHERE id = $1", [tenant.id]).catch(() => {});
     throw err;
   }
+}
+
+async function planFrameworks(planId: string): Promise<string[]> {
+  return (await globalPool.query<{ frameworks: string[] }>("SELECT frameworks FROM plans WHERE id = $1", [planId])).rows[0]
+    ?.frameworks ?? [];
+}
+
+/** Áreas a cargo por defecto de cada marco legal (las mismas que fijan las migraciones de categorías). */
+const DEFAULT_AREAS: Record<string, string[]> = {
+  ley_karin: ["Recursos Humanos"],
+  ley_20393: ["Cumplimiento", "Legal"],
+};
+
+/**
+ * Al habilitarse un marco legal (plan nuevo o plan ampliado), sus categorías sin áreas recuperan la restricción por
+ * defecto (p. ej., Ley 20.393 → Cumplimiento y Legal), creando el área si no existe. Sin esto quedarían abiertas a
+ * cualquier área, porque la empresa partió sin esas áreas. Mientras el marco no estaba en el plan, la empresa no podía
+ * editar esas categorías, así que no se pisa ninguna decisión suya.
+ */
+export async function applyDefaultAreas(tenant: Tenant, frameworks: string[]): Promise<void> {
+  const pool = tenantPool(tenant);
+  for (const framework of frameworks) {
+    const names = DEFAULT_AREAS[framework];
+    if (!names) continue;
+    // Se calculan antes: al asignar la primera área, la categoría ya no quedaría «sin áreas» para la segunda.
+    const unrestricted = (
+      await pool.query<{ id: string }>(
+        `SELECT c.id FROM categories c
+          WHERE c.legal_framework = $1 AND NOT EXISTS (SELECT 1 FROM category_areas ca WHERE ca.category_id = c.id)`,
+        [framework],
+      )
+    ).rows.map((r) => r.id);
+    if (!unrestricted.length) continue;
+    for (const name of names) {
+      await pool.query("INSERT INTO areas (name) SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM areas WHERE lower(name) = lower($1))", [name]);
+      await pool.query(
+        `INSERT INTO category_areas (category_id, area_id)
+         SELECT unnest($1::uuid[]), (SELECT id FROM areas WHERE lower(name) = lower($2))
+         ON CONFLICT DO NOTHING`,
+        [unrestricted, name],
+      );
+    }
+  }
+}
+
+async function assertActivePlan(planId: string) {
+  const plan = (await globalPool.query<{ is_active: boolean }>("SELECT is_active FROM plans WHERE id = $1", [planId])).rows[0];
+  if (!plan) throw new HttpError(400, "El plan seleccionado no existe");
+  if (!plan.is_active) throw new HttpError(400, "El plan seleccionado está desactivado");
+}
+
+/**
+ * Cambia el plan de la empresa. Aplica de inmediato y no borra nada: lo que el nuevo plan no incluye solo deja de
+ * mostrarse y de poder crearse (ver services/plans.ts).
+ */
+export async function setTenantPlan(slug: string, planId: string): Promise<{ tenant: Tenant; changed: boolean }> {
+  const before = await getTenantOr404(slug);
+  if (before.plan_id === planId) return { tenant: before, changed: false };
+  await assertActivePlan(planId);
+  const [oldFrameworks, newFrameworks] = await Promise.all([planFrameworks(before.plan_id), planFrameworks(planId)]);
+  const res = await globalPool.query<Tenant>(
+    `UPDATE tenants SET plan_id = $2, updated_at = now() WHERE slug = $1 RETURNING ${TENANT_COLUMNS}`,
+    [slug, planId],
+  );
+  const tenant = res.rows[0]!;
+  await applyDefaultAreas(tenant, newFrameworks.filter((f) => !oldFrameworks.includes(f)));
+  return { tenant, changed: true };
 }
 
 /** Actualiza la ficha de la empresa. Devuelve la empresa y los campos que cambiaron. */

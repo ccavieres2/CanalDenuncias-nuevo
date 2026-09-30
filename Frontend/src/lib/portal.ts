@@ -18,6 +18,8 @@ export interface PublicPortal {
   retentionMonths: number;
   relations: string[];
   categories: { id: string; name: string; description: string | null; framework: LegalFramework; asksDetail: boolean }[];
+  /** Módulos del plan de la empresa que ve el denunciante. */
+  features: { authenticator: boolean };
   branding: PublicBranding;
 }
 
@@ -49,6 +51,14 @@ export interface ReporterView {
   /** Sesión de 30 minutos para seguir operando sin volver a ingresar. */
   session: string;
   messages: { id: string; sender: "reporter" | "staff"; body: string; createdAt: string; readAt: string | null }[];
+  files: { id: string; name: string; sizeBytes: number; createdAt: string }[];
+  /** El plan de la empresa incluye evidencias adjuntas. */
+  evidenceEnabled: boolean;
+  /** El plan incluye la app de autenticación (si ya la asoció, igual puede quitarla). */
+  authenticatorAvailable: boolean;
+  /** Desde que la denuncia pasó a revisión y hasta su cierre. */
+  canUpload: boolean;
+  fileLimits: { maxBytes: number; maxFiles: number; maxTotalBytes: number; extensions: string[]; used: number };
 }
 
 export const PUBLIC_STEPS: { key: ReporterView["status"]; label: string }[] = [

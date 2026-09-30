@@ -6,6 +6,7 @@ import { ApiError, api } from "../../lib/api";
 import { PUBLIC_STEPS, type ReporterView, usePortal } from "../../lib/portal";
 import { formatDate } from "../../lib/ui-helpers";
 import { AuthenticatorSetup } from "./AuthenticatorSetup";
+import { ReporterFiles } from "./ReporterFiles";
 
 type Method = "key" | "app";
 
@@ -246,33 +247,39 @@ export function PortalTrackPage() {
         </div>
       </section>
 
-      <section className="rounded-2xl border border-line bg-white px-5 py-5 shadow-card sm:px-8">
-        {view.authenticatorEnabled ? (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <span className="flex items-start gap-3 text-sm">
-              <Icon name="success" className="mt-0.5 size-4 shrink-0 text-emerald-600" />
-              <span>
-                <span className="block font-medium text-gray-900">App de autenticación asociada</span>
-                <span className="block text-gray-500">Puedes entrar con el código {view.code} y el de tu app.</span>
+      {(view.evidenceEnabled || view.files.length > 0) && (
+        <ReporterFiles apiBase={apiBase} view={view} onUpdated={setView} onExpired={expired} />
+      )}
+
+      {(view.authenticatorEnabled || view.authenticatorAvailable) && (
+        <section className="rounded-2xl border border-line bg-white px-5 py-5 shadow-card sm:px-8">
+          {view.authenticatorEnabled ? (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span className="flex items-start gap-3 text-sm">
+                <Icon name="success" className="mt-0.5 size-4 shrink-0 text-emerald-600" />
+                <span>
+                  <span className="block font-medium text-gray-900">App de autenticación asociada</span>
+                  <span className="block text-gray-500">Puedes entrar con el código {view.code} y el de tu app.</span>
+                </span>
               </span>
-            </span>
-            {confirmRemove ? (
-              <span className="flex gap-2">
-                <Button onClick={() => setConfirmRemove(false)}>Cancelar</Button>
-                <Button variant="danger" onClick={removeApp}>
-                  Quitar
+              {confirmRemove ? (
+                <span className="flex gap-2">
+                  <Button onClick={() => setConfirmRemove(false)}>Cancelar</Button>
+                  <Button variant="danger" onClick={removeApp}>
+                    Quitar
+                  </Button>
+                </span>
+              ) : (
+                <Button onClick={() => setConfirmRemove(true)} className="w-full sm:w-auto">
+                  Quitar app
                 </Button>
-              </span>
-            ) : (
-              <Button onClick={() => setConfirmRemove(true)} className="w-full sm:w-auto">
-                Quitar app
-              </Button>
-            )}
-          </div>
-        ) : (
-          <AuthenticatorSetup apiBase={apiBase} session={view.session} caseCode={view.code} onEnabled={setView} />
-        )}
-      </section>
+              )}
+            </div>
+          ) : (
+            <AuthenticatorSetup apiBase={apiBase} session={view.session} caseCode={view.code} onEnabled={setView} />
+          )}
+        </section>
+      )}
     </div>
   );
 }

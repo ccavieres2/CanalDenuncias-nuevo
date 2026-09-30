@@ -1,6 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AdminLayout } from "./components/AdminLayout";
-import { ChannelLayout, RequireCaseRole, RequireChannelAdmin } from "./components/ChannelLayout";
+import { ChannelLayout, RequireCaseRole, RequireChannelAdmin, RequirePlanFeature } from "./components/ChannelLayout";
 import { AccountPage } from "./pages/AccountPage";
 import { AdminLoginPage } from "./pages/AdminLoginPage";
 import { AuditPage } from "./pages/AuditPage";
@@ -10,6 +10,7 @@ import { SystemPage } from "./pages/SystemPage";
 import { TeamPage } from "./pages/TeamPage";
 import { TenantCreatePage } from "./pages/TenantCreatePage";
 import { TenantDetailPage } from "./pages/TenantDetailPage";
+import { PlansPage } from "./pages/PlansPage";
 import { TenantLoginPage } from "./pages/TenantLoginPage";
 import { TenantsListPage } from "./pages/TenantsListPage";
 import { AccessLogPage } from "./pages/channel/AccessLogPage";
@@ -51,6 +52,7 @@ function App() {
           <Route path="tenants" element={<TenantsListPage />} />
           <Route path="tenants/new" element={<TenantCreatePage />} />
           <Route path="tenants/:slug" element={<TenantDetailPage />} />
+          <Route path="plans" element={<PlansPage />} />
           <Route path="team" element={<TeamPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="system" element={<SystemPage />} />
@@ -79,7 +81,9 @@ function App() {
           </Route>
           <Route element={<RequireCaseRole only={["case_manager"]} />}>
             <Route path="unassigned" element={<CasesPage scope="unassigned" />} />
-            <Route path="cases/new" element={<RegisterCasePage />} />
+            <Route element={<RequirePlanFeature feature="register_cases" />}>
+              <Route path="cases/new" element={<RegisterCasePage />} />
+            </Route>
           </Route>
           <Route element={<RequireCaseRole only={["resolver"]} />}>
             <Route path="resolved" element={<CasesPage scope="resolved" />} />
@@ -91,7 +95,9 @@ function App() {
             <Route path="messages" element={<MessagesPage />} />
           </Route>
           <Route element={<RequireCaseRole only={["case_manager", "resolver", "auditor"]} />}>
-            <Route path="reports" element={<ReportsPage />} />
+            <Route element={<RequirePlanFeature feature="reports" />}>
+              <Route path="reports" element={<ReportsPage />} />
+            </Route>
           </Route>
           <Route element={<RequireCaseRole only={["auditor"]} />}>
             <Route path="access-log" element={<AccessLogPage />} />
@@ -102,10 +108,16 @@ function App() {
             <Route path="areas" element={<ChannelAreasPage />} />
             <Route path="categories" element={<ChannelCategoriesPage />} />
             <Route path="portal" element={<ChannelPortalPage />} />
-            <Route path="branding" element={<ChannelBrandingPage />} />
-            <Route path="mail" element={<ChannelMailPage />} />
+            <Route element={<RequirePlanFeature feature="branding" />}>
+              <Route path="branding" element={<ChannelBrandingPage />} />
+            </Route>
+            <Route element={<RequirePlanFeature feature="custom_smtp" />}>
+              <Route path="mail" element={<ChannelMailPage />} />
+            </Route>
             <Route path="settings" element={<ChannelSettingsPage />} />
-            <Route path="flow-settings" element={<ChannelFlowsPage />} />
+            <Route element={<RequirePlanFeature feature="custom_flows" />}>
+              <Route path="flow-settings" element={<ChannelFlowsPage />} />
+            </Route>
             <Route path="audit" element={<ChannelAuditPage />} />
           </Route>
         </Route>

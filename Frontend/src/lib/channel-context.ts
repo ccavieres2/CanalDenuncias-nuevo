@@ -1,5 +1,6 @@
 import type { PublicBranding } from "./branding";
 import { useOutletContext } from "react-router";
+import type { TenantPlan } from "./plans";
 import type { TenantRole } from "./roles";
 
 /** Empresa del panel, con su marca. */
@@ -29,6 +30,8 @@ export interface ChannelUser {
 export interface ChannelContext {
   user: ChannelUser;
   tenant: ChannelTenant;
+  /** Plan de la empresa: lo que no incluye no se muestra. */
+  plan: TenantPlan;
   token: string;
   logout: () => void;
   updateToken: (token: string) => void;

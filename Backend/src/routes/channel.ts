@@ -20,6 +20,7 @@ import {
   getSettings,
   getUser,
   listAreas,
+  listCategories,
   listCategoriesWithCoverage,
   listUsers,
   renameArea,
@@ -31,7 +32,8 @@ import {
 import { resetMfa } from "../services/mfa.js";
 import { generateTemporaryPassword } from "../services/passwords.js";
 import { FLOW_FRAMEWORKS, DEFAULT_FLOW, flowConfigSchema, getFlowsOverview, isFlowFramework, saveTemplate } from "../services/flows.js";
-import { tenantAccounts } from "../services/tenants.js";
+import { type Tenant, tenantAccounts } from "../services/tenants.js";
+import { hasFramework, planOf, requireBelowLimit, requireFeature, requireFramework } from "../services/plans.js";
 import { mailRouter } from "./mail.js";
 
 /**
@@ -42,6 +44,11 @@ export const channelRouter = Router({ mergeParams: true });
 channelRouter.use(requireRole("client_admin"));
 
 // Correo saliente propio de la empresa (opcional; si no tiene, usa el de la plataforma).
+// Configurar un SMTP propio exige el módulo en el plan. Quitarlo (DELETE) siempre se permite.
+channelRouter.use("/mail", async (req, _res, next) => {
+  if (req.method === "PUT" || req.method === "POST") await requireFeature(req.tenant!, "custom_smtp");
+  next();
+});
 channelRouter.use(
   "/mail",
   mailRouter({
@@ -162,6 +169,17 @@ const idParam = (req: Request, what: string) => {
 const auditFor = (req: Request, input: Omit<AuditInput, "tenantSlug">) =>
   audit(req, { ...input, tenantSlug: req.tenant!.slug });
 
+/* ------------------------------------------------------------------ Plan */
+
+const countActiveUsers = async (tenant: Tenant) => (await listUsers(tenant)).filter((u) => u.is_active).length;
+const countActiveCategories = async (tenant: Tenant) => (await listCategories(tenant)).filter((c) => c.is_active).length;
+
+/** Flujos editables, solo de los marcos que incluye el plan. */
+async function flowsForPlan(tenant: Tenant) {
+  const [plan, overview] = await Promise.all([planOf(tenant), getFlowsOverview(tenant)]);
+  return { ...overview, flows: overview.flows.filter((f) => hasFramework(plan, f.framework)) };
+}
+
 /* ------------------------------------------------------------------ Resumen */
 
 channelRouter.get("/overview", async (req, res) => {
@@ -216,6 +234,7 @@ channelRouter.get("/users", async (req, res) => {
 channelRouter.post("/users", async (req, res) => {
   const input = newUserSchema.parse(req.body);
   await ensureRoleCombination(req, input.roles);
+  await requireBelowLimit(req.tenant!, "max_users", await countActiveUsers(req.tenant!));
   const { user, credentials } = await createUser(req.tenant!, input);
   await auditFor(req, {
     action: "user.created",
@@ -242,6 +261,9 @@ channelRouter.patch("/users/:id", async (req, res) => {
     user.is_active &&
     (isActive === false || (changes.roles !== undefined && !changes.roles.includes("client_admin")));
   if (losesAdmin) await ensureAnotherAdmin(req);
+  if (isActive === true && !user.is_active) {
+    await requireBelowLimit(tenant, "max_users", await countActiveUsers(tenant));
+  }
 
   const changed = await updateUser(tenant, user.id, changes);
   if (changed.length) {
@@ -282,6 +304,7 @@ channelRouter.get("/areas", async (req, res) => {
 });
 
 channelRouter.post("/areas", async (req, res) => {
+  await requireBelowLimit(req.tenant!, "max_areas", (await listAreas(req.tenant!)).length);
   const area = await createArea(req.tenant!, areaSchema.parse(req.body).name);
   await auditFor(req, { action: "area.created", targetType: "area", targetId: area.id, targetLabel: area.name });
   res.status(201).json({ area });
@@ -323,18 +346,30 @@ channelRouter.delete("/areas/:id", async (req, res) => {
 /* ------------------------------------------------------------------ Categorías */
 
 channelRouter.get("/categories", async (req, res) => {
-  res.json({ categories: await listCategoriesWithCoverage(req.tenant!) });
+  // Las categorías de marcos que el plan no incluye no se muestran (se conservan en la base).
+  const [plan, categories] = await Promise.all([planOf(req.tenant!), listCategoriesWithCoverage(req.tenant!)]);
+  res.json({ categories: categories.filter((c) => hasFramework(plan, c.legal_framework)) });
 });
 
 channelRouter.post("/categories", async (req, res) => {
-  const category = await createCategory(req.tenant!, categorySchema.parse(req.body));
+  const input = categorySchema.parse(req.body);
+  await requireFramework(req.tenant!, input.legalFramework);
+  await requireBelowLimit(req.tenant!, "max_categories", await countActiveCategories(req.tenant!));
+  const category = await createCategory(req.tenant!, input);
   await auditFor(req, { action: "category.created", targetType: "category", targetId: category.id, targetLabel: category.name });
   res.status(201).json({ category });
 });
 
 channelRouter.patch("/categories/:id", async (req, res) => {
   const input = categoryPatchSchema.parse(req.body);
-  const { category, changed } = await updateCategory(req.tenant!, idParam(req, "Categoría"), input);
+  const id = idParam(req, "Categoría");
+  const current = (await listCategories(req.tenant!)).find((c) => c.id === id);
+  if (!current) throw new HttpError(404, "Categoría no encontrada");
+  await requireFramework(req.tenant!, input.legalFramework ?? current.legal_framework);
+  if (input.isActive === true && !current.is_active) {
+    await requireBelowLimit(req.tenant!, "max_categories", await countActiveCategories(req.tenant!));
+  }
+  const { category, changed } = await updateCategory(req.tenant!, id, input);
   if (changed.length) {
     await auditFor(req, {
       action: "category.updated",
@@ -369,7 +404,7 @@ const FLOW_LABEL: Record<string, string> = {
 };
 
 channelRouter.get("/flows", async (req, res) => {
-  res.json(await getFlowsOverview(req.tenant!));
+  res.json(await flowsForPlan(req.tenant!));
 });
 
 channelRouter.put("/flows/:framework", async (req, res) => {
@@ -377,6 +412,8 @@ channelRouter.put("/flows/:framework", async (req, res) => {
   if (!isFlowFramework(framework)) {
     throw new HttpError(400, `Solo se pueden editar: ${FLOW_FRAMEWORKS.join(", ")}. El procedimiento de Ley Karin lo fija la ley.`);
   }
+  // El plan se revisa antes que el contenido: un marco que no incluye no se edita, ni siquiera para volver al recomendado.
+  await requireFramework(req.tenant!, framework);
   const body = z
     .object({
       config: flowConfigSchema,
@@ -390,6 +427,8 @@ channelRouter.put("/flows/:framework", async (req, res) => {
       reset: z.boolean().optional(),
     })
     .parse(req.body);
+  // Volver al flujo recomendado siempre se permite; editarlo exige el módulo.
+  if (!body.reset) await requireFeature(req.tenant!, "custom_flows");
   const config = body.reset ? DEFAULT_FLOW : body.config;
   const note = body.note ?? (body.reset ? "Se restauró el flujo recomendado" : null);
   const version = await saveTemplate(req.tenant!, framework, config, note, req.actor!.id);
@@ -399,7 +438,7 @@ channelRouter.put("/flows/:framework", async (req, res) => {
     targetLabel: `Flujo: ${FLOW_LABEL[framework]} (versión ${version})`,
     metadata: { framework, version, note },
   });
-  res.json(await getFlowsOverview(req.tenant!));
+  res.json(await flowsForPlan(req.tenant!));
 });
 
 /* ---------- Marca de la empresa (logo y color) */
@@ -409,6 +448,7 @@ channelRouter.get("/branding", async (req, res) => {
 });
 
 channelRouter.put("/branding", async (req, res) => {
+  await requireFeature(req.tenant!, "branding");
   const { primaryColor } = z.object({ primaryColor: z.string().trim().nullable() }).parse(req.body);
   const branding = await setPrimaryColor(req.tenant!, primaryColor || null, req.actor!.id);
   await auditFor(req, { action: "settings.updated", targetType: "settings", targetLabel: "Marca: color" });
@@ -416,6 +456,7 @@ channelRouter.put("/branding", async (req, res) => {
 });
 
 channelRouter.put("/branding/logo", async (req, res) => {
+  await requireFeature(req.tenant!, "branding");
   const { dataUrl } = z.object({ dataUrl: z.string().max(450_000) }).parse(req.body);
   const branding = await setLogo(req.tenant!, dataUrl, req.actor!.id);
   await auditFor(req, { action: "settings.updated", targetType: "settings", targetLabel: "Marca: logo" });

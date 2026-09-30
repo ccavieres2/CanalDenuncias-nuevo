@@ -12,12 +12,13 @@ import {
   PageHeader,
   Panel,
 } from "../../components/ui";
-import { ApiError, api } from "../../lib/api";
+import { ApiError, api, downloadFile } from "../../lib/api";
 import { ACTION_UI } from "../../lib/case-actions";
 import {
   CASE_VIEW,
   type CaseAction,
   type CaseDetail,
+  type CaseFile,
   type CaseResponse,
   type CaseRole,
   DUE_STYLES,
@@ -35,8 +36,9 @@ import {
   isOverdue,
 } from "../../lib/cases";
 import { useChannel } from "../../lib/channel-context";
+import { planHas } from "../../lib/plans";
 import { FRAMEWORKS, ROLES } from "../../lib/roles";
-import { formatDate } from "../../lib/ui-helpers";
+import { formatBytes, formatDate } from "../../lib/ui-helpers";
 import { CaseActionDialog } from "./CaseActionDialog";
 import { DemoTag } from "./CasesPage";
 
@@ -49,7 +51,95 @@ const EVENT_ICONS: Record<string, IconName> = {
   authority: "building",
   decision: "check",
   message: "mail",
+  evidence: "paperclip",
 };
+
+/**
+ * Evidencias que adjuntó el denunciante. Se descargan siempre como archivo (nunca se abren dentro de la app) y cada
+ * descarga queda auditada. El auditor ve que existen, sin nombre ni acceso al contenido.
+ */
+function CaseFilesPanel({
+  files,
+  canDownload,
+  basePath,
+  token,
+  isAnonymous,
+}: {
+  files: CaseFile[];
+  canDownload: boolean;
+  basePath: string;
+  token: string | null;
+  isAnonymous: boolean;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function download(f: CaseFile) {
+    setError(null);
+    setBusy(f.id);
+    try {
+      await downloadFile(`${basePath}/${f.id}`, f.name, token);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Error inesperado");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Panel
+      title="Evidencias del denunciante"
+      description={
+        canDownload
+          ? "Archivos que el denunciante adjuntó desde su seguimiento. Cada descarga queda registrada."
+          : "Contenido reservado: ves cuántos archivos hay y cuándo llegaron."
+      }
+      counter={files.length}
+    >
+      {error && (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
+        </div>
+      )}
+      {files.length === 0 ? (
+        <p className="text-sm text-gray-500">
+          El denunciante aún no adjunta archivos. Puede hacerlo desde su seguimiento mientras la denuncia esté abierta.
+        </p>
+      ) : (
+        <ul className="divide-y divide-line-soft rounded-lg ring-1 ring-line ring-inset">
+          {files.map((f) => (
+            <li key={f.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 text-sm">
+              <Icon name="paperclip" className="size-4 shrink-0 text-gray-400" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium text-gray-800">{f.name}</span>
+                <span className="block text-xs text-gray-500">
+                  {formatBytes(f.sizeBytes)} · {formatDate(f.createdAt, true)}
+                </span>
+                {f.sha256 && (
+                  <span className="mt-0.5 block truncate font-mono text-[11px] text-gray-400" title="Huella SHA-256 al recibirlo">
+                    SHA-256 {f.sha256}
+                  </span>
+                )}
+              </span>
+              {canDownload && (
+                <Button onClick={() => download(f)} loading={busy === f.id} className="w-full sm:w-auto">
+                  <Icon name="download" />
+                  Descargar
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {canDownload && files.length > 0 && (
+        <p className="mt-4 text-xs leading-relaxed text-gray-500">
+          Revisa los archivos en un equipo con antivirus actualizado.
+          {isAnonymous && " El denunciante es anónimo: no intentes identificarlo a partir de los datos de los archivos."}
+        </p>
+      )}
+    </Panel>
+  );
+}
 
 /** Qué se espera del rol activo en la etapa actual. */
 function nextStep(role: CaseRole, c: CaseDetail): string | null {
@@ -103,7 +193,7 @@ const PRIMARY: CaseAction[] = ["start_review", "assign", "propose", "approve"];
 /** Ficha de una denuncia. Misma vista para todos los roles; contenido y acciones según el rol activo. */
 export function CaseDetailPage() {
   const { id = "" } = useParams();
-  const { user, token, apiBase, basePath, logout } = useChannel();
+  const { user, plan, token, apiBase, basePath, logout } = useChannel();
   const role = user.activeRole as CaseRole;
   const [data, setData] = useState<CaseResponse | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -396,6 +486,16 @@ export function CaseDetailPage() {
                 </div>
               )}
             </Panel>
+          )}
+
+          {((c.reporterChannel && planHas(plan, "evidence")) || data.files.length > 0) && (
+            <CaseFilesPanel
+              files={data.files}
+              canDownload={data.canDownloadFiles}
+              basePath={`${apiBase}/cases/${id}/files`}
+              token={token}
+              isAnonymous={c.isAnonymous}
+            />
           )}
 
           <Panel title="Personas">
