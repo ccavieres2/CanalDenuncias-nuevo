@@ -1,5 +1,6 @@
 import { addBusinessDays, addCalendarDays } from "./calendar.js";
 import type { LegalFramework } from "./channel.js";
+import { DEFAULT_FLOW, type FlowConfig, type StepOwner, addDays, daysLabel } from "./flows.js";
 
 /**
  * Procedimiento legal de cada denuncia: hitos, plazos y fundamento normativo según su marco legal.
@@ -17,6 +18,9 @@ import type { LegalFramework } from "./channel.js";
  * Ley 20.393 / 21.595 y normativa interna: sin plazos legales para la investigación; se aplican las buenas prácticas
  * de ISO 37002 (acuse en 7 días y respuesta en 3 meses).
  * Ley 21.719: vulneraciones de seguridad de datos se reportan a la Agencia «sin dilaciones indebidas».
+ *
+ * Fuera de Ley Karin, la empresa puede ajustar los plazos de referencia y agregar pasos propios (flows.ts); el gestor
+ * puede agregar tareas a un caso y extender plazos que no son legales, siempre con motivo.
  */
 
 export type Origin =
@@ -86,7 +90,46 @@ export interface Milestone {
   optional: boolean;
   /** Si es un plazo fijado por ley (true) o una buena práctica de referencia (false). */
   legal: boolean;
+  /** De dónde viene: la ley, una buena práctica, el flujo de la empresa o una tarea del gestor en este caso. */
+  source: "law" | "reference" | "company" | "task";
+  /** Quién lo registra (pasos de la empresa y tareas). null = el gestor, como los hitos legales. */
+  owner: StepOwner | null;
+  /** Paso obligatorio del flujo de la empresa: sin él no se puede aprobar el cierre. */
+  required: boolean;
+  /** Plazo extendido por el gestor (solo plazos que no son legales). */
+  extension: { previousDueAt: Date | null; reason: string; at: Date } | null;
 }
+
+export interface CaseTask {
+  id: string;
+  title: string;
+  detail: string | null;
+  assignee: StepOwner;
+  due_at: Date | null;
+}
+
+export interface DeadlineExtension {
+  milestone_key: string;
+  previous_due_at: Date | null;
+  new_due_at: Date;
+  reason: string;
+  created_at: Date;
+}
+
+/** Reglas propias de la empresa y del caso, además de lo que fija la ley. */
+export interface CaseFlow {
+  config: FlowConfig;
+  /** Versión del flujo de la empresa (null = flujo recomendado). */
+  version: number | null;
+  tasks: CaseTask[];
+  /** Última extensión de cada plazo. */
+  extensions: Map<string, DeadlineExtension>;
+}
+
+export const DEFAULT_CASE_FLOW: CaseFlow = { config: DEFAULT_FLOW, version: null, tasks: [], extensions: new Map() };
+
+/** Solo se pueden extender los plazos que no fija la ley ni dependen de un tercero. */
+export const isExtendable = (m: Milestone) => !m.legal && !m.external && !m.done && m.dueAt !== null;
 
 /** Resultados posibles al registrar ciertos hitos. */
 export const MILESTONE_RESULTS: Record<string, string[]> = {
@@ -119,6 +162,10 @@ function base(key: string, label: string, detail: string, basis: string, dueAt: 
     external: false,
     optional: false,
     legal: true,
+    source: "law",
+    owner: null,
+    required: false,
+    extension: null,
   } satisfies Milestone;
 }
 
@@ -315,46 +362,108 @@ function authorityResponse(c: ProcedureCase, records: Records): Milestone[] {
   ];
 }
 
-/** Acuse y respuesta al denunciante (ISO 37002; en la UE, Directiva 2019/1937). */
-function isoMilestones(c: ProcedureCase, records: Records): Milestone[] {
+/** Acuse y respuesta al denunciante (ISO 37002; en la UE, Directiva 2019/1937), con los plazos del flujo de la empresa. */
+function isoMilestones(c: ProcedureCase, records: Records, flow: CaseFlow): Milestone[] {
   const closed = c.status === "closed";
+  const { ackDays, closureDays, dayKind } = flow.config;
+  const custom = flow.version !== null;
+  const basis = custom ? `Flujo de la empresa (versión ${flow.version})` : "Buena práctica ISO 37002";
+  const reference = { registrable: false, legal: false, source: (custom ? "company" : "reference") as Milestone["source"] };
+  const closure = addDays(c.received_at, closureDays, dayKind);
   // Sin denunciante (detectada internamente o notificada por una autoridad): solo se fija un cierre de referencia.
   if (!REPORTER_ORIGINS.includes(c.origin)) {
     return [
       {
-        ...base("closure", "Concluir la investigación", "3 meses desde la recepción", "Buena práctica ISO 37002", addCalendarDays(c.received_at, 90), records, closed),
-        registrable: false,
-        legal: false,
+        ...base("closure", "Concluir la investigación", `${daysLabel(closureDays, dayKind)} desde la recepción`, basis, closure, records, closed),
+        ...reference,
       },
     ];
   }
   return [
     {
-      ...base("ack", "Acuse de recibo al denunciante", "7 días corridos desde la recepción", "Buena práctica ISO 37002", addCalendarDays(c.received_at, 7), records, closed),
+      ...base(
+        "ack",
+        "Acuse de recibo al denunciante",
+        `${daysLabel(ackDays, dayKind)} desde la recepción`,
+        basis,
+        addDays(c.received_at, ackDays, dayKind),
+        records,
+        closed,
+      ),
       done: closed || c.acknowledged_at !== null,
       doneAt: c.acknowledged_at,
-      registrable: false,
-      legal: false,
+      ...reference,
     },
     {
-      ...base("feedback", "Respuesta al denunciante y cierre", "3 meses desde la recepción", "Buena práctica ISO 37002", addCalendarDays(c.received_at, 90), records, closed),
-      registrable: false,
-      legal: false,
+      ...base("feedback", "Respuesta al denunciante y cierre", `${daysLabel(closureDays, dayKind)} desde la recepción`, basis, closure, records, closed),
+      ...reference,
     },
   ];
 }
 
-export function procedureFor(framework: LegalFramework, c: ProcedureCase, records: Records): Milestone[] {
-  if (framework === "ley_karin") return [...authorityResponse(c, records), ...karin(c, records)];
-  return [...authorityResponse(c, records), ...frameworkMilestones(framework, c, records)];
+/** Pasos propios del flujo de la empresa y tareas que el gestor agregó a este caso. */
+function companyMilestones(c: ProcedureCase, records: Records, flow: CaseFlow): Milestone[] {
+  const closed = c.status === "closed";
+  const steps: Milestone[] = flow.config.steps.map((st) => ({
+    ...base(
+      `step:${st.key}`,
+      st.title,
+      st.days === null ? (st.description ?? "Sin plazo fijo") : `${daysLabel(st.days, st.dayKind)} desde la recepción`,
+      `Flujo de la empresa (versión ${flow.version})`,
+      st.days === null ? null : addDays(c.received_at, st.days, st.dayKind),
+      records,
+      closed,
+    ),
+    legal: false,
+    optional: !st.required,
+    required: st.required,
+    source: "company",
+    owner: st.owner,
+  }));
+  const tasks: Milestone[] = flow.tasks.map((t) => ({
+    ...base(`task:${t.id}`, t.title, t.detail ?? "Tarea agregada por el gestor", "Tarea de este caso", t.due_at, records, closed),
+    legal: false,
+    source: "task",
+    owner: t.assignee,
+  }));
+  return [...steps, ...tasks];
 }
 
-function frameworkMilestones(framework: LegalFramework, c: ProcedureCase, records: Records): Milestone[] {
+/** Aplica las extensiones de plazo registradas (solo a plazos que no son legales). */
+function withExtensions(milestones: Milestone[], flow: CaseFlow): Milestone[] {
+  return milestones.map((m) => {
+    const ext = flow.extensions.get(m.key);
+    if (!ext || m.legal || m.external) return m;
+    return {
+      ...m,
+      dueAt: ext.new_due_at,
+      extension: { previousDueAt: ext.previous_due_at, reason: ext.reason, at: ext.created_at },
+    };
+  });
+}
+
+export function procedureFor(
+  framework: LegalFramework,
+  c: ProcedureCase,
+  records: Records,
+  flow: CaseFlow = DEFAULT_CASE_FLOW,
+): Milestone[] {
+  // Ley Karin: la ley fija el procedimiento; el gestor solo puede agregar tareas propias al caso.
+  if (framework === "ley_karin") {
+    const tasks = companyMilestones(c, records, { ...flow, config: { ...flow.config, steps: [] } });
+    return withExtensions([...authorityResponse(c, records), ...karin(c, records), ...tasks], flow);
+  }
+  return withExtensions([...authorityResponse(c, records), ...frameworkMilestones(framework, c, records, flow)], flow);
+}
+
+function frameworkMilestones(framework: LegalFramework, c: ProcedureCase, records: Records, flow: CaseFlow): Milestone[] {
   const closed = c.status === "closed";
-  const iso = isoMilestones(c, records);
+  const iso = isoMilestones(c, records, flow);
   const withReporter = iso.length === 2;
   const ack = withReporter ? iso[0] : undefined;
   const feedback = withReporter ? iso[1] : iso[0];
+  // Los pasos propios y las tareas van antes de la respuesta final y el cierre.
+  const own = companyMilestones(c, records, flow);
 
   if (framework === "ley_20393") {
     return [
@@ -372,6 +481,7 @@ function frameworkMilestones(framework: LegalFramework, c: ProcedureCase, record
         done: closed || c.authority_notified_at !== null || records.has("prosecutor"),
         optional: true,
       },
+      ...own,
       feedback!,
     ];
   }
@@ -418,11 +528,11 @@ function frameworkMilestones(framework: LegalFramework, c: ProcedureCase, record
         optional: true,
       });
     }
-    out.push(feedback!);
+    out.push(...own, feedback!);
     return out;
   }
 
-  return [...(ack ? [ack] : []), feedback!];
+  return [...(ack ? [ack] : []), ...own, feedback!];
 }
 
 /** Próximo vencimiento a cargo de la empresa (lo que muestra la bandeja en «Plazo»). */

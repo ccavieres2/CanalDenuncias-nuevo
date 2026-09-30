@@ -68,7 +68,9 @@ export type CaseAction =
   | "reject"
   | "message"
   | "set_route"
-  | "milestone";
+  | "milestone"
+  | "add_task"
+  | "extend_deadline";
 
 export type Finding =
   "substantiated" | "partially" | "unsubstantiated" | "inadmissible";
@@ -134,6 +136,8 @@ export interface CaseDetail extends CaseSummary {
   reportApprovedAt: string | null;
   /** Procedimiento legal: hitos con plazo y fundamento. */
   deadlines: Milestone[];
+  /** Versión del flujo de la empresa con que se gestiona (null = recomendado). */
+  flowVersion: number | null;
   permissions: CasePermissions;
   /** Acciones disponibles ahora para el rol activo (según estado y modalidad). */
   actions: CaseAction[];
@@ -154,6 +158,17 @@ export interface Milestone {
   external: boolean;
   optional: boolean;
   legal: boolean;
+  /** De dónde viene: la ley, una buena práctica, el flujo de la empresa o una tarea del gestor. */
+  source: "law" | "reference" | "company" | "task";
+  /** Quién lo registra (pasos de la empresa y tareas). */
+  owner: "case_manager" | "investigator" | null;
+  /** Paso obligatorio del flujo de la empresa (bloquea el cierre). */
+  required: boolean;
+  /** Plazo extendido por el gestor, con su motivo. */
+  extension: { previousDueAt: string | null; reason: string; at: string } | null;
+  /** El rol activo puede registrarlo o extender su plazo ahora. */
+  canRegister: boolean;
+  canExtend: boolean;
 }
 
 export const MILESTONE_RESULT_LABEL: Record<string, string> = {

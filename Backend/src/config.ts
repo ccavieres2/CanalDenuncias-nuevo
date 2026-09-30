@@ -22,6 +22,8 @@ function storageConfig() {
   };
 }
 
+const appUrl = (process.env.APP_URL ?? "http://localhost:5173").replace(/\/+$/, "");
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
@@ -36,6 +38,8 @@ export const config = {
   // Clave para cifrar los secretos TOTP en la base. Si se pierde, todos deben reconfigurar el 2FA.
   mfaEncryptionKey: required("MFA_ENCRYPTION_KEY"),
   mfaIssuer: process.env.MFA_ISSUER ?? "Canal de Denuncias",
+  // Clave para cifrar ajustes sensibles (contraseñas SMTP). Opcional: si falta, se deriva de MFA_ENCRYPTION_KEY.
+  settingsEncryptionKey: process.env.SETTINGS_ENCRYPTION_KEY || undefined,
 
   // Servidor PostgreSQL. Hoy es el contenedor de Docker; mañana el endpoint de RDS.
   db: {
@@ -44,6 +48,10 @@ export const config = {
     user: required("DB_USER"),
     password: required("DB_PASSWORD"),
     ssl: process.env.DB_SSL === "true",
+    // Con SSL se verifica el certificado del servidor (evita que alguien se haga pasar por la base).
+    // En RDS: DB_SSL_CA_FILE con el bundle de Amazon. Solo DB_SSL_VERIFY=false lo desactiva (no recomendado).
+    sslVerify: process.env.DB_SSL_VERIFY !== "false",
+    sslCaFile: process.env.DB_SSL_CA_FILE || undefined,
     // Base de "mantenimiento" usada para CREATE/DROP DATABASE (existe por defecto en RDS).
     maintenanceDb: process.env.DB_MAINTENANCE_DB ?? "postgres",
   },
@@ -64,6 +72,22 @@ export const config = {
     hotMonths: Math.max(1, Number(process.env.AUDIT_HOT_MONTHS ?? 12)),
     // Minutos en que no se repite «abrió la denuncia» de la misma persona, con el mismo rol, sobre la misma denuncia.
     caseViewWindowMinutes: Math.max(0, Number(process.env.AUDIT_CASE_VIEW_WINDOW ?? 30)),
+  },
+
+  // Dirección pública de la aplicación (enlaces en los correos).
+  appUrl,
+  // Cookie de sesión solo por HTTPS. Por defecto, si APP_URL es https (producción).
+  cookieSecure: process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === "true" : appUrl.startsWith("https://"),
+
+  // Correo saliente (recuperación de contraseña). Desarrollo: Mailpit; producción: p. ej. Amazon SES por SMTP.
+  mail: {
+    host: process.env.SMTP_HOST || undefined,
+    port: Number(process.env.SMTP_PORT ?? 587),
+    user: process.env.SMTP_USER || undefined,
+    password: process.env.SMTP_PASSWORD || undefined,
+    from: process.env.MAIL_FROM ?? "Canal de Denuncias <no-responder@canal-denuncias.local>",
+    // Permite que las empresas usen servidores SMTP de la red interna (instalaciones propias / desarrollo).
+    allowPrivateSmtp: process.env.ALLOW_PRIVATE_SMTP === "true",
   },
 
   // Se crea automáticamente solo si todavía no existe ningún global_admin.

@@ -4,6 +4,7 @@ import { ChannelLayout, RequireCaseRole, RequireChannelAdmin } from "./component
 import { AccountPage } from "./pages/AccountPage";
 import { AdminLoginPage } from "./pages/AdminLoginPage";
 import { AuditPage } from "./pages/AuditPage";
+import { MailPage } from "./pages/MailPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SystemPage } from "./pages/SystemPage";
 import { TeamPage } from "./pages/TeamPage";
@@ -19,7 +20,9 @@ import { ChannelAreasPage } from "./pages/channel/ChannelAreasPage";
 import { ChannelAuditPage } from "./pages/channel/ChannelAuditPage";
 import { ChannelBrandingPage } from "./pages/channel/ChannelBrandingPage";
 import { ChannelCategoriesPage } from "./pages/channel/ChannelCategoriesPage";
+import { ChannelFlowsPage } from "./pages/channel/ChannelFlowsPage";
 import { ChannelHomePage } from "./pages/channel/ChannelHomePage";
+import { ChannelMailPage } from "./pages/channel/ChannelMailPage";
 import { ChannelPortalPage } from "./pages/channel/ChannelPortalPage";
 import { ChannelSettingsPage } from "./pages/channel/ChannelSettingsPage";
 import { ChannelUsersPage } from "./pages/channel/ChannelUsersPage";
@@ -51,6 +54,7 @@ function App() {
           <Route path="team" element={<TeamPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="system" element={<SystemPage />} />
+          <Route path="mail" element={<MailPage />} />
           <Route path="account" element={<AccountPage />} />
         </Route>
 
@@ -99,7 +103,9 @@ function App() {
             <Route path="categories" element={<ChannelCategoriesPage />} />
             <Route path="portal" element={<ChannelPortalPage />} />
             <Route path="branding" element={<ChannelBrandingPage />} />
+            <Route path="mail" element={<ChannelMailPage />} />
             <Route path="settings" element={<ChannelSettingsPage />} />
+            <Route path="flow-settings" element={<ChannelFlowsPage />} />
             <Route path="audit" element={<ChannelAuditPage />} />
           </Route>
         </Route>

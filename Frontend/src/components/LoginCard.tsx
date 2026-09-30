@@ -1,4 +1,11 @@
-import { type CSSProperties, type FormEvent, type ReactNode, useCallback, useState } from "react";
+import {
+  type CSSProperties,
+  type FormEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
 import { ApiError, api } from "../lib/api";
 import { ROLES, ROLE_ORDER, type TenantRole } from "../lib/roles";
 import type { LoginStartResponse, MfaVerifyResponse } from "../lib/types";
@@ -31,9 +38,25 @@ type Step =
   | { kind: "credentials" }
   | { kind: "setup"; mfaToken: string; email: string }
   | { kind: "verify"; mfaToken: string; email: string }
-  | { kind: "recovery"; token: string; codes: string[]; email: string; mustChangePassword: boolean; roles: RoleChoice }
+  | {
+      kind: "recovery";
+      token: string;
+      codes: string[];
+      email: string;
+      mustChangePassword: boolean;
+      roles: RoleChoice;
+    }
   | { kind: "password"; token: string; email: string; roles: RoleChoice }
-  | { kind: "role"; token: string; email: string; roles: RoleChoice };
+  | { kind: "role"; token: string; email: string; roles: RoleChoice }
+  // Recuperación de contraseña: correo → código → contraseña nueva → vuelve al ingreso.
+  | { kind: "forgot"; email: string }
+  | { kind: "resetCode"; email: string }
+  | { kind: "resetPassword"; email: string; resetToken: string };
+
+type Notice = { text: string; type: "error" | "success" } | null;
+
+/** Segundos que hay que esperar para pedir otro código (igual que en el backend). */
+const RESEND_SECONDS = 60;
 
 /** Roles de la persona y el que viene activo por defecto (el último que usó). */
 interface RoleChoice {
@@ -49,19 +72,38 @@ const HONEYCOMB =
   );
 
 const FEATURES = [
-  { icon: "database" as const, text: "Base de datos dedicada y aislada por organización" },
-  { icon: "lock" as const, text: "Acceso con contraseña y verificación en dos pasos" },
+  {
+    icon: "database" as const,
+    text: "Base de datos dedicada y aislada por organización",
+  },
+  {
+    icon: "lock" as const,
+    text: "Acceso con contraseña y verificación en dos pasos",
+  },
   { icon: "shield" as const, text: "Gestión confidencial de cada denuncia" },
 ];
 
-export function LoginCard({ caption, headline, tagline, description, apiBase, onAuthenticated, footer, orgLogoUrl, style }: Props) {
+export function LoginCard({
+  caption,
+  headline,
+  tagline,
+  description,
+  apiBase,
+  onAuthenticated,
+  footer,
+  orgLogoUrl,
+  style,
+}: Props) {
   const [step, setStep] = useState<Step>({ kind: "credentials" });
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice>(null);
 
-  const restart = useCallback((message: string | null) => {
-    setNotice(message);
-    setStep({ kind: "credentials" });
-  }, []);
+  const restart = useCallback(
+    (message: string | null, type: "error" | "success" = "error") => {
+      setNotice(message ? { text: message, type } : null);
+      setStep({ kind: "credentials" });
+    },
+    [],
+  );
 
   /** Último paso: si tiene varios roles, elige con cuál trabajar; si no, entra directo. */
   function finish(token: string, email: string, roles: RoleChoice) {
@@ -76,7 +118,10 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
         method: "POST",
         body: { mfaToken, code },
       });
-      const roles = { all: res.user.roles ?? [res.user.role], active: res.user.role };
+      const roles = {
+        all: res.user.roles ?? [res.user.role],
+        active: res.user.role,
+      };
       if (res.recoveryCodes?.length) {
         setStep({
           kind: "recovery",
@@ -92,7 +137,8 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
         finish(res.token, email, roles);
       }
     } catch (err) {
-      if (err instanceof ApiError && err.code === "mfa_expired") return restart(err.message);
+      if (err instanceof ApiError && err.code === "mfa_expired")
+        return restart(err.message);
       throw err;
     }
   }
@@ -124,7 +170,26 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
       title: "¿Con qué rol quieres trabajar?",
       text: "Tienes varios roles en este canal. Podrás cambiar de rol cuando quieras desde tu menú de usuario.",
     },
+    forgot: {
+      eyebrow: "Paso 1 de 3",
+      title: "¿Olvidaste tu contraseña?",
+      text: "Ingresa el correo de tu cuenta y te enviaremos un código para crear una nueva.",
+    },
+    resetCode: {
+      eyebrow: "Paso 2 de 3",
+      title: "Revisa tu correo",
+      text: "Si el correo corresponde a una cuenta activa, te enviamos un código de 6 dígitos. Vence en 15 minutos.",
+    },
+    resetPassword: {
+      eyebrow: "Paso 3 de 3",
+      title: "Crea tu nueva contraseña",
+      text: "Al guardarla se cerrarán tus sesiones abiertas. Para ingresar seguirás usando tu app de autenticación.",
+    },
   }[step.kind];
+  const resetting =
+    step.kind === "forgot" ||
+    step.kind === "resetCode" ||
+    step.kind === "resetPassword";
 
   return (
     <div className="flex min-h-screen bg-white" style={style}>
@@ -136,16 +201,27 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
           style={{
             backgroundImage: `url("${HONEYCOMB}")`,
             backgroundSize: "56px 100px",
-            maskImage: "radial-gradient(ellipse at 70% 30%, black 10%, transparent 70%)",
+            maskImage:
+              "radial-gradient(ellipse at 70% 30%, black 10%, transparent 70%)",
           }}
         />
-        <div aria-hidden className="pointer-events-none absolute -top-48 -right-40 size-[560px] rounded-full bg-highlight/25 blur-3xl" />
-        <div aria-hidden className="pointer-events-none absolute -bottom-56 -left-40 size-[480px] rounded-full bg-brand-navy/60 blur-3xl" />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -top-48 -right-40 size-[560px] rounded-full bg-highlight/25 blur-3xl"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-56 -left-40 size-[480px] rounded-full bg-brand-navy/60 blur-3xl"
+        />
 
         <div className="relative">
           {orgLogoUrl ? (
             <div className="inline-flex h-16 items-center rounded-2xl bg-white px-5">
-              <img src={orgLogoUrl} alt={caption} className="max-h-10 w-auto max-w-[260px] object-contain" />
+              <img
+                src={orgLogoUrl}
+                alt={caption}
+                className="max-h-10 w-auto max-w-[260px] object-contain"
+              />
             </div>
           ) : (
             <Brand caption={caption} />
@@ -153,11 +229,18 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
         </div>
 
         <div className="relative max-w-md">
-          <h2 className="text-[34px] leading-[1.15] font-semibold tracking-tight text-white">{headline}</h2>
-          <p className="mt-4 text-base leading-relaxed text-white/60">{tagline}</p>
+          <h2 className="text-[34px] leading-[1.15] font-semibold tracking-tight text-white">
+            {headline}
+          </h2>
+          <p className="mt-4 text-base leading-relaxed text-white/60">
+            {tagline}
+          </p>
           <ul className="mt-10 space-y-4">
             {FEATURES.map((f) => (
-              <li key={f.text} className="flex items-center gap-3.5 text-[15px] text-white/80">
+              <li
+                key={f.text}
+                className="flex items-center gap-3.5 text-[15px] text-white/80"
+              >
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] ring-1 ring-white/10">
                   <Icon name={f.icon} className="size-[18px] text-highlight" />
                 </span>
@@ -172,7 +255,9 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
             Powered by <BrandLogo tone="dark" className="h-[18px]" />
           </p>
         ) : (
-          <p className="relative text-sm text-white/40">© {new Date().getFullYear()} BeeHives · Canal de Denuncias</p>
+          <p className="relative text-sm text-white/40">
+            © {new Date().getFullYear()} BeeHives · Canal de Denuncias
+          </p>
         )}
       </aside>
 
@@ -183,8 +268,10 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
         </div>
 
         <div className="flex flex-1 items-center justify-center px-6 py-12 sm:px-10">
-          <div className={`w-full ${step.kind === "setup" || step.kind === "recovery" || step.kind === "password" || step.kind === "role" ? "max-w-[460px]" : "max-w-[400px]"}`}>
-            {(step.kind === "setup" || step.kind === "verify") && (
+          <div
+            className={`w-full ${step.kind === "setup" || step.kind === "recovery" || step.kind === "password" || step.kind === "role" || step.kind === "resetPassword" ? "max-w-[460px]" : "max-w-[400px]"}`}
+          >
+            {(step.kind === "setup" || step.kind === "verify" || resetting) && (
               <button
                 type="button"
                 onClick={() => restart(null)}
@@ -196,12 +283,24 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
             )}
 
             {orgLogoUrl && step.kind === "credentials" && (
-              <img src={orgLogoUrl} alt={caption} className="mb-8 h-12 w-auto max-w-[240px] object-contain lg:hidden" />
+              <img
+                src={orgLogoUrl}
+                alt={caption}
+                className="mb-8 h-12 w-auto max-w-[240px] object-contain lg:hidden"
+              />
             )}
-            {header.eyebrow && <p className="mb-2 text-sm font-semibold text-highlight-text">{header.eyebrow}</p>}
-            <h1 className="text-[30px] font-semibold tracking-tight text-gray-900">{header.title}</h1>
-            <p className="mt-2 text-[15px] leading-relaxed text-gray-500">{header.text}</p>
-            {step.kind !== "credentials" && (
+            {header.eyebrow && (
+              <p className="mb-2 text-sm font-semibold text-highlight-text">
+                {header.eyebrow}
+              </p>
+            )}
+            <h1 className="text-[30px] font-semibold tracking-tight text-gray-900">
+              {header.title}
+            </h1>
+            <p className="mt-2 text-[15px] leading-relaxed text-gray-500">
+              {header.text}
+            </p>
+            {step.kind !== "credentials" && step.kind !== "forgot" && (
               <p className="mt-3 inline-flex items-center gap-2 rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-600">
                 <Icon name="user" className="size-3.5" />
                 {step.email}
@@ -215,8 +314,49 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
                   notice={notice}
                   onSuccess={(res) => {
                     setNotice(null);
-                    setStep({ kind: res.mfa, mfaToken: res.mfaToken, email: res.user.email });
+                    setStep({
+                      kind: res.mfa,
+                      mfaToken: res.mfaToken,
+                      email: res.user.email,
+                    });
                   }}
+                  onForgot={(email) => {
+                    setNotice(null);
+                    setStep({ kind: "forgot", email });
+                  }}
+                />
+              )}
+              {step.kind === "forgot" && (
+                <ForgotForm
+                  apiBase={apiBase}
+                  initialEmail={step.email}
+                  onSent={(email) => setStep({ kind: "resetCode", email })}
+                />
+              )}
+              {step.kind === "resetCode" && (
+                <ResetCodeForm
+                  apiBase={apiBase}
+                  email={step.email}
+                  onVerified={(resetToken) =>
+                    setStep({
+                      kind: "resetPassword",
+                      email: step.email,
+                      resetToken,
+                    })
+                  }
+                />
+              )}
+              {step.kind === "resetPassword" && (
+                <ChangePasswordForm
+                  apiBase={apiBase}
+                  resetToken={step.resetToken}
+                  submitLabel="Guardar contraseña"
+                  onChanged={() =>
+                    restart(
+                      "Tu contraseña se cambió. Ingresa con ella para continuar.",
+                      "success",
+                    )
+                  }
                 />
               )}
               {step.kind === "setup" && (
@@ -227,7 +367,11 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
                   onVerify={(code) => verify(step.mfaToken, step.email, code)}
                 />
               )}
-              {step.kind === "verify" && <MfaVerifyStep onVerify={(code) => verify(step.mfaToken, step.email, code)} />}
+              {step.kind === "verify" && (
+                <MfaVerifyStep
+                  onVerify={(code) => verify(step.mfaToken, step.email, code)}
+                />
+              )}
               {step.kind === "password" && (
                 <ChangePasswordForm
                   apiBase={apiBase}
@@ -237,7 +381,12 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
                 />
               )}
               {step.kind === "role" && (
-                <RolePicker apiBase={apiBase} token={step.token} roles={step.roles} onSelected={onAuthenticated} />
+                <RolePicker
+                  apiBase={apiBase}
+                  token={step.token}
+                  roles={step.roles}
+                  onSelected={onAuthenticated}
+                />
               )}
               {step.kind === "recovery" && (
                 <RecoveryCodesStep
@@ -245,7 +394,12 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
                   account={step.email}
                   onContinue={() =>
                     step.mustChangePassword
-                      ? setStep({ kind: "password", token: step.token, email: step.email, roles: step.roles })
+                      ? setStep({
+                          kind: "password",
+                          token: step.token,
+                          email: step.email,
+                          roles: step.roles,
+                        })
                       : finish(step.token, step.email, step.roles)
                   }
                 />
@@ -254,8 +408,12 @@ export function LoginCard({ caption, headline, tagline, description, apiBase, on
 
             {step.kind === "credentials" && (
               <div className="mt-10 flex items-start gap-3 rounded-lg bg-gray-50 px-4 py-3.5 text-sm text-gray-500 ring-1 ring-inset ring-gray-200/70">
-                <Icon name="lock" className="mt-0.5 size-4 shrink-0 text-gray-400" />
-                Acceso restringido a usuarios autorizados. La actividad en esta plataforma puede ser registrada.
+                <Icon
+                  name="lock"
+                  className="mt-0.5 size-4 shrink-0 text-gray-400"
+                />
+                Acceso restringido a usuarios autorizados. La actividad en esta
+                plataforma puede ser registrada.
               </div>
             )}
             {step.kind === "credentials" && footer}
@@ -270,10 +428,12 @@ function CredentialsForm({
   apiBase,
   notice,
   onSuccess,
+  onForgot,
 }: {
   apiBase: string;
-  notice: string | null;
+  notice: Notice;
   onSuccess: (res: LoginStartResponse) => void;
+  onForgot: (email: string) => void;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -285,7 +445,12 @@ function CredentialsForm({
     setError(null);
     setLoading(true);
     try {
-      onSuccess(await api<LoginStartResponse>(`${apiBase}/auth/login`, { method: "POST", body: { email, password } }));
+      onSuccess(
+        await api<LoginStartResponse>(`${apiBase}/auth/login`, {
+          method: "POST",
+          body: { email, password },
+        }),
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Error inesperado");
       setLoading(false);
@@ -294,7 +459,11 @@ function CredentialsForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {(error ?? notice) && <Alert>{error ?? notice}</Alert>}
+      {error ? (
+        <Alert>{error}</Alert>
+      ) : (
+        notice && <Alert type={notice.type}>{notice.text}</Alert>
+      )}
       <Field
         label="Correo electrónico"
         type="email"
@@ -314,9 +483,176 @@ function CredentialsForm({
         value={password}
         onChange={(e) => setPassword(e.target.value)}
       />
-      <Button type="submit" variant="primary" loading={loading} className="mt-3 h-11 w-full text-[15px]">
+      <div className="-mt-2 flex justify-end">
+        <button
+          type="button"
+          onClick={() => onForgot(email)}
+          className="text-sm font-medium text-highlight-text hover:underline"
+        >
+          ¿Olvidaste tu contraseña?
+        </button>
+      </div>
+      <Button
+        type="submit"
+        variant="primary"
+        loading={loading}
+        className="h-11 w-full text-[15px]"
+      >
         Continuar
       </Button>
+    </form>
+  );
+}
+
+/** Paso 1 de la recuperación: pide el código por correo. */
+function ForgotForm({
+  apiBase,
+  initialEmail,
+  onSent,
+}: {
+  apiBase: string;
+  initialEmail: string;
+  onSent: (email: string) => void;
+}) {
+  const [email, setEmail] = useState(initialEmail);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      await api(`${apiBase}/auth/password-reset/request`, {
+        method: "POST",
+        body: { email },
+      });
+      onSent(email.trim().toLowerCase());
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Error inesperado");
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-5">
+      {error && <Alert>{error}</Alert>}
+      <Field
+        label="Correo electrónico"
+        type="email"
+        autoComplete="email"
+        placeholder="nombre@empresa.com"
+        required
+        autoFocus
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <Button
+        type="submit"
+        variant="primary"
+        loading={loading}
+        className="mt-3 h-11 w-full text-[15px]"
+      >
+        Enviar código
+      </Button>
+    </form>
+  );
+}
+
+/** Paso 2 de la recuperación: ingresa el código que llegó al correo (y puede pedir otro). */
+function ResetCodeForm({
+  apiBase,
+  email,
+  onVerified,
+}: {
+  apiBase: string;
+  email: string;
+  onVerified: (resetToken: string) => void;
+}) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [wait, setWait] = useState(RESEND_SECONDS);
+
+  useEffect(() => {
+    if (wait <= 0) return;
+    const id = setTimeout(() => setWait((w) => w - 1), 1000);
+    return () => clearTimeout(id);
+  }, [wait]);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setInfo(null);
+    setLoading(true);
+    try {
+      const res = await api<{ resetToken: string }>(
+        `${apiBase}/auth/password-reset/verify`,
+        { method: "POST", body: { email, code } },
+      );
+      onVerified(res.resetToken);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Error inesperado");
+      setLoading(false);
+    }
+  }
+
+  async function resend() {
+    setError(null);
+    setInfo(null);
+    setWait(RESEND_SECONDS);
+    try {
+      await api(`${apiBase}/auth/password-reset/request`, {
+        method: "POST",
+        body: { email },
+      });
+      setCode("");
+      setInfo("Te enviamos un código nuevo. El anterior ya no sirve.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Error inesperado");
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-5">
+      {error && <Alert>{error}</Alert>}
+      {info && <Alert type="success">{info}</Alert>}
+      <Field
+        label="Código de verificación"
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        placeholder="000000"
+        maxLength={6}
+        required
+        autoFocus
+        value={code}
+        onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+        mono
+      />
+      <Button
+        type="submit"
+        variant="primary"
+        loading={loading}
+        disabled={code.length !== 6}
+        className="mt-3 h-11 w-full text-[15px]"
+      >
+        Verificar código
+      </Button>
+      <p className="text-center text-sm text-gray-500">
+        ¿No te llegó? Revisa tu carpeta de spam o{" "}
+        {wait > 0 ? (
+          <span>pide otro en {wait} s.</span>
+        ) : (
+          <button
+            type="button"
+            onClick={resend}
+            className="font-medium text-highlight-text hover:underline"
+          >
+            envía un código nuevo
+          </button>
+        )}
+      </p>
     </form>
   );
 }
@@ -341,7 +677,11 @@ function RolePicker({
     setError(null);
     setLoading(role);
     try {
-      const res = await api<{ token: string }>(`${apiBase}/auth/switch-role`, { method: "POST", token, body: { role } });
+      const res = await api<{ token: string }>(`${apiBase}/auth/switch-role`, {
+        method: "POST",
+        token,
+        body: { role },
+      });
       onSelected(res.token);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Error inesperado");
@@ -359,7 +699,9 @@ function RolePicker({
           disabled={loading !== null}
           onClick={() => choose(r)}
           className={`group flex w-full items-center gap-4 rounded-xl p-4 text-left ring-1 transition ring-inset disabled:opacity-60 ${
-            r === roles.active ? "bg-accent-soft ring-highlight/50" : "ring-line hover:bg-gray-50 hover:ring-gray-300"
+            r === roles.active
+              ? "bg-accent-soft ring-highlight/50"
+              : "ring-line hover:bg-gray-50 hover:ring-gray-300"
           }`}
         >
           <span className="min-w-0 flex-1">
@@ -371,12 +713,17 @@ function RolePicker({
                 </span>
               )}
             </span>
-            <span className="mt-1 block text-sm leading-relaxed text-gray-500">{ROLES[r].description}</span>
+            <span className="mt-1 block text-sm leading-relaxed text-gray-500">
+              {ROLES[r].description}
+            </span>
           </span>
           {loading === r ? (
             <span className="size-5 shrink-0 animate-spin rounded-full border-2 border-accent border-r-transparent" />
           ) : (
-            <Icon name="chevron" className="size-4 shrink-0 text-gray-400 transition group-hover:translate-x-0.5" />
+            <Icon
+              name="chevron"
+              className="size-4 shrink-0 text-gray-400 transition group-hover:translate-x-0.5"
+            />
           )}
         </button>
       ))}

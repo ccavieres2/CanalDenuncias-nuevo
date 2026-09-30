@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import pg from "pg";
 import { config } from "../config.js";
 
@@ -7,6 +8,20 @@ export interface DbTarget {
   database: string;
 }
 
+/**
+ * TLS hacia PostgreSQL. Con DB_SSL=true se valida el certificado: con el CA de DB_SSL_CA_FILE (en RDS, el bundle
+ * de Amazon: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem) o, si no, con los CA del sistema.
+ */
+const ssl = config.db.ssl
+  ? {
+      rejectUnauthorized: config.db.sslVerify,
+      ca: config.db.sslCaFile ? readFileSync(config.db.sslCaFile, "utf8") : undefined,
+    }
+  : undefined;
+if (config.db.ssl && !config.db.sslVerify) {
+  console.warn("[db] ADVERTENCIA: DB_SSL_VERIFY=false, no se verifica el certificado de la base de datos.");
+}
+
 function connectionOptions(target: DbTarget) {
   return {
     host: target.host,
@@ -14,7 +29,7 @@ function connectionOptions(target: DbTarget) {
     database: target.database,
     user: config.db.user,
     password: config.db.password,
-    ssl: config.db.ssl ? { rejectUnauthorized: false } : undefined,
+    ssl,
   };
 }
 

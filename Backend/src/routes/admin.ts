@@ -24,6 +24,7 @@ import {
   updateTenantProfile,
 } from "../services/tenants.js";
 import { authFlowRouter } from "./auth-flow.js";
+import { mailRouter } from "./mail.js";
 
 /** Rutas del global_admin (equipo BeeHives): /api/admin/... */
 export const adminRouter = Router();
@@ -96,7 +97,13 @@ const publicTenant = (t: Tenant) => ({
 
 adminRouter.use(
   "/auth",
-  authFlowRouter({ roles: ["global_admin"], store: () => globalAccounts, scope: () => "global" }),
+  authFlowRouter({
+    roles: ["global_admin"],
+    store: () => globalAccounts,
+    scope: () => "global",
+    organization: () => "Consola de administración",
+    loginPath: () => "/admin/login",
+  }),
 );
 
 // /auth/me responde aunque haya un cambio de contraseña pendiente, para que el frontend lo sepa.
@@ -117,6 +124,9 @@ adminRouter.get("/auth/me", requireRole("global_admin", { allowPendingPasswordCh
 });
 
 adminRouter.use(requireRole("global_admin"));
+
+// Correo saliente por defecto de la plataforma (lo usan las empresas que no configuran el suyo).
+adminRouter.use("/mail", mailRouter({ scope: () => ({ kind: "platform" }), organization: () => "Consola de administración" }));
 
 /* ------------------------------------------------------------------ Resumen, sistema y auditoría */
 

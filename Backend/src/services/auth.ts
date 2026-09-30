@@ -76,6 +76,27 @@ export function verifyMfaToken(token: string, scope: string): MfaPayload | null 
 }
 
 /**
+ * Token de recuperación: prueba que la persona ingresó el código que llegó a su correo. Solo sirve para
+ * elegir la contraseña nueva de esa solicitud (rid), en ese ámbito, durante 10 minutos.
+ */
+export interface ResetPayload {
+  typ: "reset";
+  sub: string;
+  /** Id de la solicitud en password_resets. */
+  rid: string;
+  scope: string;
+}
+
+export function signResetToken(payload: Omit<ResetPayload, "typ">): string {
+  return jwt.sign({ ...payload, typ: "reset" }, config.jwtSecret, { expiresIn: "10m" });
+}
+
+export function verifyResetToken(token: string, scope: string): ResetPayload | null {
+  const payload = verify(token);
+  return payload?.typ === "reset" && payload.scope === scope ? (payload as unknown as ResetPayload) : null;
+}
+
+/**
  * Sesión del denunciante en el portal: solo da acceso a su denuncia, en su empresa, por 30 minutos.
  * Se obtiene con la clave de seguimiento o con el código de la app de autenticación.
  */

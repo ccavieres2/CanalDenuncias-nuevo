@@ -15,6 +15,7 @@ const NAV: NavSection[] = [
     items: [
       { to: "/admin/team", label: "Equipo BeeHives", icon: "users" },
       { to: "/admin/audit", label: "Auditoría", icon: "activity" },
+      { to: "/admin/mail", label: "Correo saliente", icon: "mail" },
       { to: "/admin/system", label: "Estado del sistema", icon: "server" },
     ],
   },

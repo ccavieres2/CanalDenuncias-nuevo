@@ -14,8 +14,12 @@ import {
   listUsers,
 } from "./channel.js";
 import { addBusinessDays, addCalendarDays } from "./calendar.js";
+import { type FlowTemplateRow, listTemplates, rulesOf, stampFlow } from "./flows.js";
 import {
+  type CaseFlow,
+  type CaseTask,
   type CompanyRelation,
+  type DeadlineExtension,
   MILESTONE_RESULTS,
   type Milestone,
   type MilestoneRecord,
@@ -23,6 +27,7 @@ import {
   RELATION_LABEL,
   REPORTER_ORIGINS,
   type Route,
+  isExtendable,
   nextDue,
   procedureFor,
 } from "./procedures.js";
@@ -115,6 +120,8 @@ interface CaseRow {
   ongoing: "yes" | "no" | "unknown" | null;
   urgent_protection: boolean;
   is_demo: boolean;
+  /** Versión del flujo de la empresa con que partió (NULL = flujo recomendado). */
+  flow_template_id: string | null;
 }
 
 /** Ley Karin: quién realizó la conducta respecto de la persona afectada. */
@@ -141,6 +148,9 @@ const BASE_PERMISSIONS: Record<CaseRole, CasePermissions> = {
 
 /* ------------------------------------------------------------------ Plazos */
 
+const formatChileDate = (d: Date) =>
+  new Intl.DateTimeFormat("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
+
 export const caseDueDate = (framework: LegalFramework, receivedAt: Date) =>
   framework === "ley_karin" ? addBusinessDays(receivedAt, 30) : addCalendarDays(receivedAt, 90);
 
@@ -158,10 +168,45 @@ async function loadMilestones(db: pg.Pool | pg.PoolClient, caseIds?: string[]): 
   return out;
 }
 
-function milestonesOf(c: CaseRow, ctx: Ctx, records: RecordsByCase): Milestone[] {
-  const category = ctx.categories.find((x) => x.id === c.category_id)!;
-  return procedureFor(category.legal_framework, c, records.get(c.id) ?? new Map());
+/** Tareas agregadas por el gestor y extensiones de plazo de cada caso. */
+interface FlowData {
+  tasks: Map<string, CaseTask[]>;
+  extensions: Map<string, Map<string, DeadlineExtension>>;
 }
+
+async function loadFlowData(db: pg.Pool | pg.PoolClient, caseIds?: string[]): Promise<FlowData> {
+  const filter = caseIds ? "WHERE case_id = ANY($1)" : "";
+  const params = caseIds ? [caseIds] : [];
+  const [tasks, extensions] = await Promise.all([
+    db.query<CaseTask & { case_id: string }>(`SELECT * FROM case_tasks ${filter} ORDER BY created_at`, params),
+    db.query<DeadlineExtension & { case_id: string }>(`SELECT * FROM case_deadline_extensions ${filter} ORDER BY created_at`, params),
+  ]);
+  const out: FlowData = { tasks: new Map(), extensions: new Map() };
+  for (const t of tasks.rows) out.tasks.set(t.case_id, [...(out.tasks.get(t.case_id) ?? []), t]);
+  // Ordenadas por fecha: la última extensión de cada plazo es la que rige.
+  for (const e of extensions.rows) {
+    if (!out.extensions.has(e.case_id)) out.extensions.set(e.case_id, new Map());
+    out.extensions.get(e.case_id)!.set(e.milestone_key, e);
+  }
+  return out;
+}
+
+function flowOf(c: CaseRow, ctx: Ctx, data: FlowData): CaseFlow {
+  return {
+    ...rulesOf(ctx.templates, c.flow_template_id),
+    tasks: data.tasks.get(c.id) ?? [],
+    extensions: data.extensions.get(c.id) ?? new Map(),
+  };
+}
+
+function milestonesOf(c: CaseRow, ctx: Ctx, records: RecordsByCase, data: FlowData): Milestone[] {
+  const category = ctx.categories.find((x) => x.id === c.category_id)!;
+  return procedureFor(category.legal_framework, c, records.get(c.id) ?? new Map(), flowOf(c, ctx, data));
+}
+
+/** Pasos obligatorios del flujo de la empresa que aún no se registran (bloquean el cierre). */
+const pendingRequired = (milestones: Milestone[], owner?: "investigator") =>
+  milestones.filter((m) => m.source === "company" && m.required && !m.done && (!owner || m.owner === owner));
 
 /* ------------------------------------------------------------------ Visibilidad */
 
@@ -180,11 +225,16 @@ function canSee(role: CaseRole, me: ChannelUser, c: CaseRow, myCategoryIds: Set<
 }
 
 async function loadContext(tenant: Tenant, userId: string) {
-  const [users, categories, settings] = await Promise.all([listUsers(tenant), listCategories(tenant), getSettings(tenant)]);
+  const [users, categories, settings, templates] = await Promise.all([
+    listUsers(tenant),
+    listCategories(tenant),
+    getSettings(tenant),
+    listTemplates(tenantPool(tenant)),
+  ]);
   const me = users.find((u) => u.id === userId);
   if (!me) throw new HttpError(401, "No autenticado");
   const myCategoryIds = new Set(effectiveCategories(me, categories).map((c) => c.id));
-  return { users, categories, settings, me, myCategoryIds };
+  return { users, categories, settings, me, myCategoryIds, templates: templates as FlowTemplateRow[] };
 }
 
 type Ctx = Awaited<ReturnType<typeof loadContext>>;
@@ -207,6 +257,8 @@ export const CASE_ACTIONS = [
   "message",
   "set_route",
   "milestone",
+  "add_task",
+  "extend_deadline",
 ] as const;
 export type CaseAction = (typeof CASE_ACTIONS)[number];
 
@@ -234,6 +286,9 @@ function availableActions(
     if (["received", "in_review", "investigating"].includes(c.status)) actions.push("reclassify");
     if (open) actions.push("measure");
     if (open && milestones.some((m) => m.registrable && !m.done)) actions.push("milestone");
+    // Flexibilidad del caso puntual: tareas propias y extensión de plazos internos (nunca de los legales).
+    if (open) actions.push("add_task");
+    if (open && milestones.some(isExtendable)) actions.push("extend_deadline");
     // En Ley Karin los avisos a la DT se registran como hitos del procedimiento.
     if (open && !karin) actions.push("authority");
     // Solo se puede escribir si el denunciante tiene clave de seguimiento para leer la respuesta.
@@ -244,13 +299,20 @@ function availableActions(
   }
   if (role === "investigator" && c.investigator_id === ctx.me.id) {
     if (c.status === "investigating") actions.push("diligence", "propose");
+    // Pasos del flujo de la empresa y tareas que le corresponden al investigador.
+    if (open && milestones.some((m) => m.registrable && !m.done && m.owner === "investigator")) actions.push("milestone");
     if (open) actions.push("measure", "note");
     if (open && c.tracking_key_hash) actions.push("message");
   }
   if (role === "resolver" && c.status === "resolution") {
     const ownWork = c.investigator_id === ctx.me.id || c.proposed_by === ctx.me.id;
+    // Una desestimación no exige los pasos del flujo (no hubo investigación).
+    const missing = c.finding === "inadmissible" ? [] : pendingRequired(milestones);
     if (ctx.settings.caseRules.mode === "complete" && ownWork) {
       approveBlockedReason = "Participaste en este caso: en la modalidad completa otra persona del comité debe resolverlo.";
+    } else if (missing.length) {
+      approveBlockedReason = `Faltan pasos obligatorios del flujo de la empresa: ${missing.map((m) => m.label).join(", ")}. Devuelve el caso para completarlos.`;
+      actions.push("reject");
     } else {
       actions.push("approve", "reject");
     }
@@ -350,8 +412,19 @@ function presentDetail(role: CaseRole, c: CaseRow, ctx: Ctx, milestones: Milesto
     resolvedBy: contentVisible ? userName(c.resolved_by) : null,
     reportApprovedAt: c.report_approved_at,
     authorityNotifiedAt: c.authority_notified_at,
-    // Procedimiento legal: hitos, plazos y fundamento. El auditor ve estados y fechas, sin notas.
-    deadlines: milestones.map((m) => (contentVisible ? m : { ...m, note: null })),
+    // Procedimiento: hitos legales, del flujo de la empresa y tareas del caso. El auditor ve estados, fechas y
+    // extensiones (con su motivo), sin notas.
+    deadlines: milestones.map((m) => ({
+      ...(contentVisible ? m : { ...m, note: null }),
+      canRegister:
+        m.registrable &&
+        !m.done &&
+        actions.includes("milestone") &&
+        (role === "case_manager" || (role === "investigator" && m.owner === "investigator")),
+      canExtend: role === "case_manager" && actions.includes("extend_deadline") && isExtendable(m),
+    })),
+    // Versión del flujo de la empresa con que se gestiona (null = recomendado; no aplica a Ley Karin).
+    flowVersion: rulesOf(ctx.templates, c.flow_template_id).version,
     permissions: BASE_PERMISSIONS[role],
     actions,
     approveBlockedReason,
@@ -387,15 +460,16 @@ async function messageStats(tenant: Tenant): Promise<Map<string, MessageStats & 
 /** Casos visibles para el rol, con su procedimiento calculado. */
 async function visibleCases(tenant: Tenant, ctx: Ctx, role: CaseRole, where = "") {
   const pool = tenantPool(tenant);
-  const [rows, records] = await Promise.all([
+  const [rows, records, flowData] = await Promise.all([
     pool.query<CaseRow>(`SELECT * FROM cases ${where} ORDER BY received_at DESC`),
     loadMilestones(pool),
+    loadFlowData(pool),
   ]);
   return {
     all: rows.rows,
     visible: rows.rows
       .filter((c) => canSee(role, ctx.me, c, ctx.myCategoryIds))
-      .map((c) => ({ c, milestones: milestonesOf(c, ctx, records) })),
+      .map((c) => ({ c, milestones: milestonesOf(c, ctx, records, flowData) })),
   };
 }
 
@@ -413,7 +487,8 @@ async function findVisibleCase(ctx: Ctx, role: CaseRole, id: string, db: pg.Pool
   const c = (await db.query<CaseRow>(`SELECT * FROM cases WHERE id = $1${lock ? " FOR UPDATE" : ""}`, [id])).rows[0];
   // Mismo 404 para "no existe", "no te corresponde" y "estás involucrado": no se revela que el caso existe.
   if (!c || !canSee(role, ctx.me, c, ctx.myCategoryIds)) throw new HttpError(404, "Denuncia no encontrada");
-  const milestones = milestonesOf(c, ctx, await loadMilestones(db, [c.id]));
+  const [records, flowData] = await Promise.all([loadMilestones(db, [c.id]), loadFlowData(db, [c.id])]);
+  const milestones = milestonesOf(c, ctx, records, flowData);
   return { c, milestones };
 }
 
@@ -573,6 +648,15 @@ const pastDate = z
   .optional()
   .transform((v) => (v ? v : undefined));
 
+/** Fecha AAAA-MM-DD de hoy en adelante; vence al final de ese día en Chile. */
+const futureDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, { message: "Fecha inválida" })
+  .refine((v) => v >= new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago" }).format(new Date()), {
+    message: "La fecha no puede ser pasada",
+  })
+  .transform((v) => addCalendarDays(new Date(`${v}T12:00:00-04:00`), 0));
+
 /** Convierte una fecha AAAA-MM-DD a un instante: si es hoy, ahora; si no, mediodía de ese día en Chile. */
 function dateToInstant(date: string | undefined, notBefore: Date, label: string): Date {
   if (!date) return new Date();
@@ -613,11 +697,22 @@ export const ACTION_SCHEMAS = {
     reason: optionalText(1000),
   }),
   milestone: z.object({
-    key: z.string().min(1).max(40),
+    key: z.string().min(1).max(60),
     date: pastDate,
     result: optionalText(40),
     detail: optionalText(3000),
     reporterMessage: optionalText(3000),
+  }),
+  add_task: z.object({
+    title: text(3, 120, "El título"),
+    detail: optionalText(1000),
+    assignee: z.enum(["case_manager", "investigator"], { message: "Indica quién la realiza" }),
+    dueDate: futureDate.optional(),
+  }),
+  extend_deadline: z.object({
+    key: z.string().min(1).max(60),
+    date: futureDate,
+    reason: text(10, 1000, "El motivo"),
   }),
 } satisfies Record<CaseAction, z.ZodType>;
 
@@ -717,6 +812,8 @@ export async function applyCaseAction<A extends CaseAction>(
           category.id,
           caseDueDate(category.legal_framework, c.received_at),
         ]);
+        // Entra al flujo vigente de su nuevo marco.
+        await stampFlow(client, c.id, category.legal_framework, c.received_at);
         await event("Denuncia reclasificada", `De «${categoryName(c.category_id)}» a «${category.name}». Motivo: ${reason}`);
         summary = `Reclasificada como ${category.name}.`;
         break;
@@ -771,6 +868,9 @@ export async function applyCaseAction<A extends CaseAction>(
         const { key, date, result, detail, reporterMessage } = input as ActionInput<"milestone">;
         const m = milestones.find((x) => x.key === key && x.registrable && !x.done);
         if (!m) throw new HttpError(400, "Ese hito no corresponde a esta denuncia, aún no corresponde registrarlo o ya fue registrado.");
+        if (role === "investigator" && m.owner !== "investigator") {
+          throw new HttpError(403, "Este paso lo registra el gestor de denuncias.");
+        }
         // «Sin pronunciamiento» solo cuando ya venció el plazo de 30 días hábiles de la DT.
         if (key === "dt_ruling" && result === "no_ruling" && m.dueAt && m.dueAt.getTime() > Date.now()) {
           throw new HttpError(400, "Aún no vence el plazo de la DT para pronunciarse; registra su respuesta cuando llegue.");
@@ -784,7 +884,11 @@ export async function applyCaseAction<A extends CaseAction>(
           [c.id, key, at, result ?? null, detail ?? null, ctx.me.id],
         );
         const parts = [result ? RESULT_LABEL[result] : null, detail].filter(Boolean).join(". ");
-        await event(m.label, parts || null, key.startsWith("dt_") || key === "agency_notice" ? "authority" : "decision");
+        await event(
+          m.source === "task" ? `Tarea cumplida: ${m.label}` : m.source === "company" ? `Paso del flujo: ${m.label}` : m.label,
+          parts || null,
+          key.startsWith("dt_") || key === "agency_notice" ? "authority" : "decision",
+        );
         summary = `Registrado: ${m.label}.`;
         // Aplicar las medidas finales cierra la denuncia.
         if (key === "measures_applied") {
@@ -793,6 +897,42 @@ export async function applyCaseAction<A extends CaseAction>(
           if (reporterMessage && c.origin !== "dt") await staffMessage(reporterMessage);
           summary = "Medidas registradas: la denuncia quedó cerrada.";
         }
+        break;
+      }
+      case "add_task": {
+        const { title, detail, assignee, dueDate } = input as ActionInput<"add_task">;
+        const count = await client.query<{ n: string }>("SELECT count(*) AS n FROM case_tasks WHERE case_id = $1", [c.id]);
+        if (Number(count.rows[0]!.n) >= 30) throw new HttpError(400, "Este caso ya tiene 30 tareas.");
+        await client.query(
+          "INSERT INTO case_tasks (case_id, title, detail, assignee, due_at, created_by) VALUES ($1, $2, $3, $4, $5, $6)",
+          [c.id, title, detail ?? null, assignee, dueDate ?? null, ctx.me.id],
+        );
+        const who = assignee === "investigator" ? "investigador" : "gestor";
+        await event(
+          "Tarea agregada",
+          `${title} (a cargo del ${who}${dueDate ? `, vence el ${formatChileDate(dueDate)}` : ""}).${detail ? ` ${detail}` : ""}`,
+        );
+        summary = `Tarea agregada: ${title}.`;
+        break;
+      }
+      case "extend_deadline": {
+        const { key, date, reason } = input as ActionInput<"extend_deadline">;
+        const m = milestones.find((x) => x.key === key);
+        if (!m || !isExtendable(m)) {
+          throw new HttpError(400, m?.legal ? "Los plazos legales no se pueden extender." : "Ese plazo no se puede extender.");
+        }
+        if (date.getTime() <= m.dueAt!.getTime()) throw new HttpError(400, "La nueva fecha debe ser posterior al plazo actual.");
+        await client.query(
+          `INSERT INTO case_deadline_extensions (case_id, milestone_key, previous_due_at, new_due_at, reason, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [c.id, key, m.dueAt, date, reason, ctx.me.id],
+        );
+        await event(
+          `Plazo extendido: ${m.label}`,
+          `Del ${formatChileDate(m.dueAt!)} al ${formatChileDate(date)}. Motivo: ${reason}`,
+          "decision",
+        );
+        summary = `Plazo extendido al ${formatChileDate(date)}.`;
         break;
       }
       case "assign": {
@@ -834,6 +974,10 @@ export async function applyCaseAction<A extends CaseAction>(
       }
       case "propose": {
         const { finding, text: report } = input as ActionInput<"propose">;
+        const missing = pendingRequired(milestones, "investigator");
+        if (missing.length) {
+          throw new HttpError(409, `Antes de enviar la conclusión registra los pasos obligatorios: ${missing.map((m) => m.label).join(", ")}.`);
+        }
         await update("status = 'resolution', finding = $2, proposal = $3, proposed_at = now(), proposed_by = $4", [
           finding,
           report,
@@ -1101,6 +1245,8 @@ export async function registerCase(tenant: Tenant, userId: string, raw: unknown)
       identity.representation,
     ],
   );
+  // Versión vigente del flujo de la empresa para este marco.
+  await stampFlow(pool, res.rows[0]!.id, framework, receivedAt);
   const actor = `${ctx.me.name} · ${ROLE_LABEL.case_manager}`;
   await pool.query(
     `INSERT INTO case_events (case_id, actor_label, actor_role, actor_user_id, action, detail, kind)
@@ -1231,6 +1377,8 @@ export async function submitReport(tenant: Tenant, raw: unknown): Promise<{ id: 
       karin && input.urgentProtection,
     ],
   );
+  // Versión vigente del flujo de la empresa para este marco.
+  await stampFlow(pool, res.rows[0]!.id, category.legal_framework, receivedAt);
   await pool.query(
     "INSERT INTO case_events (case_id, actor_label, action, detail) VALUES ($1, 'Sistema', 'Denuncia recibida por el canal', $2)",
     [

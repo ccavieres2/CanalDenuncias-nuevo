@@ -1,4 +1,5 @@
 import cors from "cors";
+import helmet from "helmet";
 import express from "express";
 import { bootstrap } from "./bootstrap.js";
 import { config } from "./config.js";
@@ -9,7 +10,17 @@ import { tenantRouter } from "./routes/tenant.js";
 
 const app = express();
 app.set("trust proxy", config.trustProxy);
-app.use(cors({ origin: config.corsOrigin.split(",") }));
+// Cabeceras de seguridad. La API solo devuelve JSON e imágenes: no carga nada ni puede mostrarse en un iframe.
+app.use(
+  helmet({
+    contentSecurityPolicy: { useDefaults: false, directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] } },
+    crossOriginResourcePolicy: { policy: "same-origin" },
+    // Solo tiene efecto por HTTPS. Sin includeSubDomains, para no afectar otros subdominios del dominio.
+    strictTransportSecurity: { maxAge: 31_536_000, includeSubDomains: false },
+    referrerPolicy: { policy: "no-referrer" },
+  }),
+);
+app.use(cors({ origin: config.corsOrigin.split(","), credentials: true }));
 // 100 KB por defecto; solo la subida del logo de la empresa admite más (imagen en base64 de hasta 300 KB).
 const jsonSmall = express.json();
 const jsonLogo = express.json({ limit: "450kb" });

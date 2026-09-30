@@ -182,9 +182,15 @@ export function CaseDetailPage() {
   );
   const secondary = c.actions.filter(
     (a) =>
-      !PRIMARY.includes(a) && !["message", "reject", "milestone"].includes(a),
+      !PRIMARY.includes(a) &&
+      ![
+        "message",
+        "reject",
+        "milestone",
+        "add_task",
+        "extend_deadline",
+      ].includes(a),
   );
-  const canRegister = c.actions.includes("milestone");
   // «En seguimiento» solo existe en Ley Karin.
   // Si investiga la DT, la empresa no pasa por investigación interna ni por el comité.
   const stages = STATUS_ORDER.filter(
@@ -678,9 +684,16 @@ export function CaseDetailPage() {
           <ProcedurePanel
             milestones={c.deadlines}
             framework={c.category.framework}
-            onRegister={
-              canRegister
-                ? (key) => setDialog({ action: "milestone", milestoneKey: key })
+            flowVersion={c.flowVersion}
+            onRegister={(key) =>
+              setDialog({ action: "milestone", milestoneKey: key })
+            }
+            onExtend={(key) =>
+              setDialog({ action: "extend_deadline", milestoneKey: key })
+            }
+            onAddTask={
+              c.actions.includes("add_task")
+                ? () => setDialog({ action: "add_task" })
                 : undefined
             }
           />
@@ -714,17 +727,64 @@ const PROCEDURE_TITLE: Record<string, string> = {
 };
 
 /** Hitos del procedimiento legal, con plazo, fundamento y registro. */
+const SOURCE_TAG: Record<
+  Milestone["source"],
+  { label: string; style: string } | null
+> = {
+  law: null,
+  reference: null,
+  company: {
+    label: "Flujo de la empresa",
+    style: "bg-violet-50 text-violet-700 ring-violet-600/20",
+  },
+  task: {
+    label: "Tarea del caso",
+    style: "bg-sky-50 text-sky-700 ring-sky-600/20",
+  },
+};
+
 function ProcedurePanel({
   milestones,
   framework,
+  flowVersion,
   onRegister,
+  onExtend,
+  onAddTask,
 }: {
   milestones: Milestone[];
   framework: string;
-  onRegister?: (key: string) => void;
+  flowVersion: number | null;
+  onRegister: (key: string) => void;
+  onExtend: (key: string) => void;
+  onAddTask?: () => void;
 }) {
+  const flowNote =
+    framework === "ley_karin"
+      ? null
+      : flowVersion === null
+        ? "Flujo recomendado de la plataforma."
+        : `Flujo de la empresa, versión ${flowVersion}.`;
   return (
-    <Panel title="Procedimiento legal" description={PROCEDURE_TITLE[framework]}>
+    <Panel
+      title="Procedimiento y plazos"
+      description={
+        <>
+          {PROCEDURE_TITLE[framework]}
+          {flowNote && <span className="block">{flowNote}</span>}
+        </>
+      }
+      actions={
+        onAddTask && (
+          <button
+            onClick={onAddTask}
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-highlight-text ring-1 ring-highlight/30 ring-inset transition hover:bg-accent-soft"
+          >
+            <Icon name="plus" className="size-3" />
+            Agregar tarea
+          </button>
+        )
+      }
+    >
       <ol className="space-y-5">
         {milestones.map((m) => {
           const late = !m.done && !!m.dueAt && isOverdue(m.dueAt);
@@ -760,7 +820,28 @@ function ProcedurePanel({
                       (si corresponde)
                     </span>
                   )}
+                  {m.required && !m.done && (
+                    <span className="ml-1.5 text-xs font-normal text-gray-500">
+                      (obligatorio)
+                    </span>
+                  )}
                 </p>
+                {(SOURCE_TAG[m.source] || m.owner === "investigator") && (
+                  <p className="mt-1 flex flex-wrap gap-1.5">
+                    {SOURCE_TAG[m.source] && (
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${SOURCE_TAG[m.source]!.style}`}
+                      >
+                        {SOURCE_TAG[m.source]!.label}
+                      </span>
+                    )}
+                    {m.owner === "investigator" && (
+                      <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold text-gray-600">
+                        A cargo del investigador
+                      </span>
+                    )}
+                  </p>
+                )}
                 <p
                   className={`mt-0.5 text-xs ${late ? "font-medium text-red-700" : "text-gray-500"}`}
                 >
@@ -782,18 +863,39 @@ function ProcedurePanel({
                     {m.note}
                   </p>
                 )}
+                {m.extension && (
+                  <p className="mt-1 text-xs text-amber-800">
+                    Plazo extendido
+                    {m.extension.previousDueAt &&
+                      ` (antes: ${formatDate(m.extension.previousDueAt)})`}
+                    . Motivo: {m.extension.reason}
+                  </p>
+                )}
                 <p className="mt-1 text-[11px] text-gray-400">
                   {m.basis}
-                  {!m.legal && " · referencial"}
+                  {m.legal ? " · plazo legal" : " · no es plazo legal"}
                 </p>
-                {onRegister && m.registrable && !m.done && (
-                  <button
-                    onClick={() => onRegister(m.key)}
-                    className="mt-2 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-highlight-text ring-1 ring-highlight/30 ring-inset transition hover:bg-accent-soft"
-                  >
-                    <Icon name="check" className="size-3" />
-                    {m.external ? "Registrar respuesta" : "Registrar"}
-                  </button>
+                {(m.canRegister || m.canExtend) && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {m.canRegister && (
+                      <button
+                        onClick={() => onRegister(m.key)}
+                        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-highlight-text ring-1 ring-highlight/30 ring-inset transition hover:bg-accent-soft"
+                      >
+                        <Icon name="check" className="size-3" />
+                        {m.external ? "Registrar respuesta" : "Registrar"}
+                      </button>
+                    )}
+                    {m.canExtend && (
+                      <button
+                        onClick={() => onExtend(m.key)}
+                        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-gray-600 ring-1 ring-line ring-inset transition hover:bg-gray-50"
+                      >
+                        <Icon name="clock" className="size-3" />
+                        Extender plazo
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             </li>

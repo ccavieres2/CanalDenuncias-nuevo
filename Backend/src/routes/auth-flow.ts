@@ -3,6 +3,7 @@ import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { HttpError } from "../errors.js";
 import { requireRole } from "../middleware/auth.js";
+import type { Tenant } from "../services/tenants.js";
 import { type AccountStore, findAccountByEmail, findAccountById, setLastRole, setPassword } from "../services/accounts.js";
 import { audit } from "../services/audit.js";
 import {
@@ -15,7 +16,9 @@ import {
   verifyPassword,
 } from "../services/auth.js";
 import { beginTotpSetup, completeTotpSetup, regenerateRecoveryCodes, verifySecondFactor } from "../services/mfa.js";
+import { completePasswordReset, requestPasswordReset, verifyResetCode } from "../services/password-reset.js";
 import { passwordSchema } from "../services/passwords.js";
+import { clearSession, issueSession } from "../services/session-cookie.js";
 
 interface AuthScope {
   /** Roles que pueden usar este flujo (para las rutas que exigen sesión). */
@@ -24,6 +27,12 @@ interface AuthScope {
   store: (req: Request) => AccountStore;
   /** "global" o el slug de la empresa; amarra el token intermedio a este ámbito. */
   scope: (req: Request) => string;
+  /** Nombre que aparece en los correos (la empresa o «Consola de administración»). */
+  organization: (req: Request) => string;
+  /** Página de ingreso de este ámbito (para los enlaces de los correos). */
+  loginPath: (req: Request) => string;
+  /** Empresa del ámbito (sus correos usan su SMTP); ausente en la consola de la plataforma. */
+  tenant?: (req: Request) => Tenant;
 }
 
 const loginSchema = z.object({
@@ -38,6 +47,11 @@ const changePasswordSchema = z.object({
 });
 const codeSchema = z.object({ code: z.string().trim().min(6, "Ingresa el código").max(6) });
 const switchRoleSchema = z.object({ role: z.string().min(1) });
+const resetRequestSchema = z.object({ email: z.string().trim().toLowerCase().email("Email inválido") });
+const resetVerifySchema = resetRequestSchema.extend({
+  code: z.string().trim().regex(/^\d{6}$/, "El código tiene 6 dígitos"),
+});
+const resetCompleteSchema = z.object({ resetToken: z.string().min(1), newPassword: passwordSchema });
 
 // Frena ataques de fuerza bruta contra contraseñas y códigos 2FA.
 const authLimiter = rateLimit({
@@ -46,6 +60,15 @@ const authLimiter = rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: { error: "Demasiados intentos. Espera unos minutos antes de volver a intentarlo." },
+});
+
+// Solicitudes de código por correo: más estricto, para que no se use para enviar correos masivos.
+const resetRequestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Demasiadas solicitudes. Espera unos minutos antes de pedir otro código." },
 });
 
 /**
@@ -57,13 +80,28 @@ const authLimiter = rateLimit({
  *   POST /change-password  sesión                → obligatorio si la contraseña es temporal
  *   POST /recovery-codes   sesión + código       → nuevo juego de códigos de recuperación
  *   POST /switch-role      sesión + rol          → sesión nueva con otro de sus roles
+ *   POST /logout                                 → borra la cookie de sesión
+ *
+ * La sesión viaja en una cookie HttpOnly (ver session-cookie.ts); el campo `token` de las respuestas es solo un
+ * marcador, salvo que se pida «X-Session-Mode: bearer».
+ *
+ * Recuperación de contraseña (sin sesión; el 2FA se sigue pidiendo al ingresar):
+ *   POST /password-reset/request   email            → envía un código de 6 dígitos al correo (respuesta siempre igual)
+ *   POST /password-reset/verify    email + código   → resetToken
+ *   POST /password-reset/complete  resetToken + contraseña nueva
  *
  * Una persona puede tener varios roles; el token lleva el rol activo y los permisos
  * se evalúan con él.
  */
-export function authFlowRouter({ roles, store, scope }: AuthScope): Router {
+export function authFlowRouter({ roles, store, scope, organization, loginPath, tenant }: AuthScope): Router {
   const router = Router({ mergeParams: true });
   const tenantOf = (req: Request) => (scope(req) === "global" ? undefined : scope(req));
+  const resetContext = (req: Request) => ({
+    store: store(req),
+    tenant: tenant?.(req),
+    organization: organization(req),
+    loginPath: loginPath(req),
+  });
 
   async function accountFromMfaToken(req: Request) {
     const { mfaToken } = mfaTokenSchema.parse(req.body);
@@ -123,7 +161,7 @@ export function authFlowRouter({ roles, store, scope }: AuthScope): Router {
     await accounts.pool.query(`UPDATE ${accounts.table} SET last_login_at = now() WHERE id = $1`, [account.id]);
     await audit(req, { action: "auth.login", actor: { ...actor, role }, tenantSlug: tenantOf(req), metadata: { method } });
     res.json({
-      token: signAccessToken({ sub: account.id, role, tenant: tenantOf(req) }),
+      token: issueSession(req, res, signAccessToken({ sub: account.id, role, tenant: tenantOf(req) }), tenantOf(req)),
       user: { id: account.id, name: account.name, email: account.email, role, roles: account.roles },
       mustChangePassword: account.must_change_password,
       recoveryCodes,
@@ -145,7 +183,9 @@ export function authFlowRouter({ roles, store, scope }: AuthScope): Router {
     await setPassword(accounts, account.id, await hashPassword(newPassword), false);
     await audit(req, { action: "auth.password_changed", tenantSlug: tenantOf(req) });
     // El cambio invalida las sesiones anteriores; se entrega una nueva para seguir trabajando.
-    res.json({ token: signAccessToken({ sub: account.id, role: req.actor!.role, tenant: tenantOf(req) }) });
+    res.json({
+      token: issueSession(req, res, signAccessToken({ sub: account.id, role: req.actor!.role, tenant: tenantOf(req) }), tenantOf(req)),
+    });
   });
 
   router.post("/switch-role", requireRole(roles), async (req, res) => {
@@ -164,7 +204,57 @@ export function authFlowRouter({ roles, store, scope }: AuthScope): Router {
         metadata: { from, to: role },
       });
     }
-    res.json({ token: signAccessToken({ sub: account.id, role: role as Role, tenant: tenantOf(req) }) });
+    res.json({
+      token: issueSession(req, res, signAccessToken({ sub: account.id, role: role as Role, tenant: tenantOf(req) }), tenantOf(req)),
+    });
+  });
+
+  // Cierra la sesión del navegador (borra la cookie). No exige sesión: salir siempre debe funcionar.
+  router.post("/logout", (req, res) => {
+    clearSession(res, tenantOf(req));
+    res.json({ ok: true });
+  });
+
+  router.post("/password-reset/request", resetRequestLimiter, async (req, res) => {
+    const { email } = resetRequestSchema.parse(req.body);
+    // Se responde de inmediato y el correo sale en segundo plano: así la respuesta (y lo que tarda) es la misma
+    // exista o no la cuenta, y nadie puede averiguar qué correos están registrados.
+    requestPasswordReset(resetContext(req), email)
+      .then(async (account) => {
+        if (account) {
+          await audit(req, {
+            action: "auth.password_reset_requested",
+            actor: { id: account.id, email: account.email },
+            tenantSlug: tenantOf(req),
+          });
+        }
+      })
+      .catch((err) => console.error(`[recuperación] no se pudo enviar el código: ${(err as Error).message}`));
+    res.json({ ok: true });
+  });
+
+  router.post("/password-reset/verify", authLimiter, async (req, res) => {
+    const { email, code } = resetVerifySchema.parse(req.body);
+    try {
+      const { resetToken } = await verifyResetCode(store(req), scope(req), email, code);
+      res.json({ resetToken });
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 400) {
+        await audit(req, { action: "auth.password_reset_failed", actor: { id: null, email }, tenantSlug: tenantOf(req) });
+      }
+      throw err;
+    }
+  });
+
+  router.post("/password-reset/complete", authLimiter, async (req, res) => {
+    const { resetToken, newPassword } = resetCompleteSchema.parse(req.body);
+    const account = await completePasswordReset(resetContext(req), scope(req), resetToken, newPassword);
+    await audit(req, {
+      action: "auth.password_reset",
+      actor: { id: account.id, email: account.email },
+      tenantSlug: tenantOf(req),
+    });
+    res.json({ ok: true });
   });
 
   router.post("/recovery-codes", authLimiter, requireRole(roles), async (req, res) => {

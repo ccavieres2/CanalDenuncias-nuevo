@@ -2,6 +2,7 @@ import type { RequestHandler } from "express";
 import { HttpError } from "../errors.js";
 import { findAccount, globalAccounts } from "../services/accounts.js";
 import { type AccessPayload, type Role, verifyAccessToken } from "../services/auth.js";
+import { checkSameOrigin, requestToken } from "../services/session-cookie.js";
 import { type Tenant, tenantAccounts } from "../services/tenants.js";
 
 declare global {
@@ -15,10 +16,6 @@ declare global {
   }
 }
 
-function readToken(header: string | undefined) {
-  if (!header?.startsWith("Bearer ")) return null;
-  return verifyAccessToken(header.slice("Bearer ".length)) as (AccessPayload & { iat?: number }) | null;
-}
 
 /**
  * Exige una sesión válida cuyo rol activo (el elegido al ingresar) sea alguno de los
@@ -34,8 +31,11 @@ export function requireRole(
 ): RequestHandler {
   const allowed = new Set<Role>(typeof roles === "string" ? [roles] : roles);
   return async (req, _res, next) => {
-    const payload = readToken(req.headers.authorization);
-    if (!payload) throw new HttpError(401, "No autenticado");
+    const found = requestToken(req);
+    const payload = found && (verifyAccessToken(found.token) as (AccessPayload & { iat?: number }) | null);
+    if (!found || !payload) throw new HttpError(401, "No autenticado");
+    // La cookie viaja sola: se exige que la petición venga de esta misma aplicación (CSRF).
+    if (found.via === "cookie") checkSameOrigin(req);
     // Un token de empresa no sirve en la consola global, ni en otra empresa, ni al revés.
     if (req.tenant ? payload.tenant !== req.tenant.slug : payload.role !== "global_admin") {
       throw new HttpError(403, "No autorizado");

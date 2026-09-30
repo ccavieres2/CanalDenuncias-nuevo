@@ -98,11 +98,27 @@ export const ACTION_UI: Record<CaseAction, { label: string; icon: IconName; titl
     submit: "Guardar procedimiento",
   },
   milestone: {
-    label: "Registrar hito legal",
+    label: "Registrar hito",
     icon: "check",
-    title: "Registrar hito legal",
-    description: "Deja constancia de un paso exigido por la ley y de la fecha en que se cumplió.",
+    title: "Registrar hito",
+    description: "Deja constancia de un paso del procedimiento y de la fecha en que se cumplió.",
     submit: "Registrar",
+  },
+  add_task: {
+    label: "Agregar tarea",
+    icon: "plus",
+    title: "Agregar una tarea a este caso",
+    description:
+      "Pasos adicionales que este caso necesita (por ejemplo, pedir un informe a TI). No cambian el flujo de la empresa ni los plazos legales.",
+    submit: "Agregar tarea",
+  },
+  extend_deadline: {
+    label: "Extender plazo",
+    icon: "clock",
+    title: "Extender un plazo",
+    description:
+      "Solo plazos internos o de referencia. Los plazos legales no se pueden extender. El motivo queda registrado y lo ve el auditor.",
+    submit: "Extender plazo",
   },
   message: {
     label: "Escribir al denunciante",

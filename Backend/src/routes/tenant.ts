@@ -33,6 +33,9 @@ tenantRouter.use(
     roles: TENANT_ROLES,
     store: (req) => tenantAccounts(req.tenant!),
     scope: (req) => req.tenant!.slug,
+    organization: (req) => req.tenant!.name,
+    loginPath: (req) => `/${req.tenant!.slug}/login`,
+    tenant: (req) => req.tenant!,
   }),
 );
 

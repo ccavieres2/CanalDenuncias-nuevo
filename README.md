@@ -10,6 +10,9 @@ PostgreSQL (Docker hoy / RDS mañana)
 └── tenant_otra_empresa → …
 ```
 
+> **Seguridad:** las medidas de seguridad, cómo están implementadas y la lista para producción están en
+> [docs/seguridad-tecnica.md](docs/seguridad-tecnica.md).
+
 ## Levantar el proyecto
 
 Requisitos: Docker Desktop.
@@ -24,8 +27,16 @@ docker compose up -d --build
 | Admin global | http://localhost:5173/admin/login |
 | Empresa | http://localhost:5173/{slug}/login |
 | API | http://localhost:4000/api/health |
-| PostgreSQL | localhost:5432 (usuario/clave del `.env`) |
+| PostgreSQL | localhost:`DB_EXPOSED_PORT` (5432 por defecto; usuario/clave del `.env`) |
 | pgAdmin | http://localhost:5050 (servidor ya registrado; pide la clave `DB_PASSWORD` la primera vez) |
+| Correos (Mailpit) | http://localhost:8025 (todos los correos que envía el sistema en desarrollo) |
+
+PostgreSQL, pgAdmin, la API directa (4000) y Mailpit solo escuchan en `127.0.0.1`: no quedan expuestos a la red
+local. La app (5173) sí, para poder probarla desde el celular en la misma red.
+Si ya tienes un PostgreSQL instalado en Windows usando el 5432, pon `DB_EXPOSED_PORT=5433` en `.env`.
+
+**Producción:** `Backend/Dockerfile` y `Frontend/Dockerfile` tienen un target `prod` (el frontend es nginx con la app
+compilada, las cabeceras de seguridad y el proxy de `/api`). Ver la lista de configuración en [docs/seguridad-tecnica.md](docs/seguridad-tecnica.md).
 
 El primer global_admin se crea solo al arrancar si no existe ninguno
 (`GLOBAL_ADMIN_EMAIL` / `GLOBAL_ADMIN_PASSWORD` del `.env`).
@@ -51,6 +62,10 @@ El 2FA con app de autenticación (TOTP: Google/Microsoft Authenticator, Authy) e
 2. Primera vez: se muestra un QR, se confirma un código y se entregan 8 **códigos de recuperación** (una sola vez).
 3. Siguientes veces: se pide el código de 6 dígitos (o un código de recuperación).
 
+- **Sesión en cookie HttpOnly** (`cd_admin` o `cd_t_<empresa>`, `SameSite=Strict`, `Secure` con HTTPS): el
+  JavaScript no puede leerla. Las peticiones que modifican datos deben venir del propio sitio (verificación de
+  `Origin`, contra CSRF). Integraciones y scripts: pedir el login con `X-Session-Mode: bearer` y usar
+  `Authorization: Bearer <token>`.
 - El secreto TOTP se guarda cifrado (AES-256-GCM) con `MFA_ENCRYPTION_KEY`. **No pierdas esa clave**: sin ella nadie puede validar sus códigos.
 - Un código ya usado no se acepta de nuevo, y hay un límite de 30 intentos cada 15 minutos por IP.
 - Si un client_admin pierde su teléfono, el global_admin puede usar **"Restablecer 2FA"** en la ficha de la empresa.
@@ -60,6 +75,49 @@ El 2FA con app de autenticación (TOTP: Google/Microsoft Authenticator, Authy) e
   UPDATE global_admins SET totp_secret = NULL, totp_enabled_at = NULL, totp_last_step = NULL, recovery_codes = '{}'
   WHERE email = 'admin@canal-denuncias.local';
   ```
+
+### Recuperar la contraseña por correo
+
+En la pantalla de ingreso (consola y cada empresa), **«¿Olvidaste tu contraseña?»**:
+
+1. La persona escribe su correo. Si la cuenta existe y está activa, recibe un **código de 6 dígitos** que vence en
+   15 minutos. La respuesta es siempre la misma (exista o no la cuenta) y el correo sale en segundo plano, para que
+   nadie pueda averiguar qué correos están registrados.
+2. Ingresa el código: máximo 5 intentos, luego se anula. Puede pedir otro cada 60 s (máximo 5 por hora); el nuevo anula
+   el anterior. En la base (`password_resets`) solo queda el HMAC del código.
+3. Elige la contraseña nueva (misma política). Se cierran sus sesiones abiertas y se le envía un aviso por correo.
+
+El **2FA no cambia**: para entrar sigue pidiendo la app de autenticación. Todo queda en la auditoría
+(`auth.password_reset_requested`, `auth.password_reset_failed`, `auth.password_reset`).
+
+### Correo saliente (SMTP)
+
+Se configura **desde la aplicación**, en un menú propio «Correo saliente»:
+
+| Dónde | Quién | Para qué |
+|---|---|---|
+| Consola → Administración → **Correo saliente** | global_admin | SMTP por defecto de la plataforma (consola y empresas sin SMTP propio) |
+| Panel de la empresa → Configuración del canal → **Correo saliente** | client_admin | SMTP propio (opcional): los correos de su canal salen desde su dominio |
+
+Cada correo se intenta, en orden, con: **SMTP de la empresa → SMTP de la plataforma → SMTP del `.env`**. Si uno
+falla se usa el siguiente (nadie se queda sin su código de recuperación) y la falla se muestra en la pantalla de
+ese SMTP. Por el SMTP de la plataforma, los correos de una empresa llevan su nombre como remitente.
+
+- Sirve **cualquier SMTP** con usuario y contraseña, o sin autenticación (relay interno): Microsoft 365 / Exchange,
+  Gmail / Google Workspace, Outlook.com, Amazon SES, SendGrid, Brevo, Mailgun, Postmark, Resend, Zoho u otro. Los
+  proveedores habituales vienen predefinidos. Seguridad STARTTLS, SSL/TLS o sin cifrado (este último sin usuario).
+  No incluye OAuth2 (Microsoft 365 y Google exigen que el buzón tenga habilitado SMTP con contraseña o de aplicación).
+- **Probar** envía un correo real con los datos del formulario, antes o después de guardar.
+- La contraseña se guarda **cifrada** (AES-256-GCM con `SETTINGS_ENCRYPTION_KEY`, o una clave derivada de
+  `MFA_ENCRYPTION_KEY`) y nunca se devuelve a la interfaz. Plataforma: `platform_settings` (base global); empresa:
+  `settings` (key `mail`) en su base.
+- **Protección de la red interna:** una empresa solo puede usar servidores públicos y los puertos 25, 465, 587 o 2525
+  (se valida la IP resuelta, también al enviar). Para instalaciones propias con SMTP interno: `ALLOW_PRIVATE_SMTP=true`.
+- Todo queda en la auditoría (`mail.updated`, `mail.removed`, `mail.tested`).
+
+**Desarrollo:** sin nada configurado, los correos los atrapa **Mailpit** (incluido en `docker compose`) y se ven en
+http://localhost:8025; no salen a internet. **Producción:** se configura en la consola; conviene verificar el dominio
+del remitente (SPF, DKIM, DMARC) para que los correos no lleguen a spam.
 
 Después de agregar dependencias con npm, reconstruye con `docker compose up -d --build -V`.
 
@@ -232,6 +290,26 @@ fallidos la denuncia se bloquea 15 minutos (la clave sigue funcionando). La app 
 «Seguimiento: DEN-…», sin el nombre de la empresa. Al ingresar se entrega una sesión de 30 minutos válida solo para
 esa denuncia y esa empresa.
 
+## Flujos de gestión editables
+
+Siguiendo ISO 37002 (el proceso lo define la organización) y la separación de funciones:
+
+| Quién | Qué puede hacer |
+|---|---|
+| **client_admin** (Configuración del canal → **Flujos de gestión**) | Editar las plantillas de Ley 20.393, Ley 21.719 y normativa interna: plazos de referencia (acuse y cierre, en días corridos o hábiles) y hasta 15 **pasos propios** (plazo, obligatorio u opcional, y si lo registra el gestor o el investigador). |
+| **Gestor de denuncias** (en cada caso) | **Agregar tareas** al caso (también en Ley Karin) y **extender plazos** que no son legales, siempre con motivo. |
+| **Investigador** | Registrar los pasos y tareas que le corresponden. |
+| **Auditor** | Ver con qué versión del flujo se gestionó cada caso y cada extensión con su motivo. |
+| **Ley Karin y plazos legales** | Nadie los edita. |
+
+- Cada cambio crea una **versión nueva** (`flow_templates`) que aplica a las denuncias **nuevas**: cada denuncia guarda
+  la versión con que partió (`cases.flow_template_id`; `NULL` = flujo recomendado). Al reclasificar, toma el flujo
+  vigente de su nuevo marco. Se puede volver al recomendado (queda como otra versión).
+- Los **pasos obligatorios** bloquean el cierre: el investigador no puede proponer sin los suyos y el comité no puede
+  aprobar si falta alguno (salvo una desestimación).
+- Tareas en `case_tasks`, extensiones en `case_deadline_extensions` (solo hacia adelante y nunca de un plazo legal).
+  Todo queda en la bitácora del caso y en la auditoría (`flow.updated`, `case.add_task`, `case.extend_deadline`).
+
 ## Archivos (logos y evidencias): carpeta local hoy, S3 en producción
 
 Todo archivo pasa por una sola capa (`Backend/src/storage/`), con la misma estructura en ambos modos. Cada empresa
@@ -312,7 +390,10 @@ DB_HOST=mi-instancia.xxxxx.us-east-1.rds.amazonaws.com
 DB_USER=<usuario maestro o uno con CREATEDB>
 DB_PASSWORD=...
 DB_SSL=true
+DB_SSL_CA_FILE=/ruta/al/rds-global-bundle.pem   # se verifica el certificado del servidor
 ```
+
+El bundle de certificados de RDS se descarga de https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem.
 
 El backend crea `canal_global` si no existe. Cada tenant guarda su `db_host`, así que más adelante
 se pueden crear empresas nuevas en otra instancia (`TENANT_DB_HOST`) sin mover las existentes.

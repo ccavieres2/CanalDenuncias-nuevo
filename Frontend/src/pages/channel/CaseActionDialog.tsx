@@ -105,6 +105,9 @@ export function CaseActionDialog({
     otherCompany: detail.otherCompany ?? "",
     date: today(),
     result: "",
+    title: "",
+    assignee: detail.investigator ? "investigator" : "case_manager",
+    dueDate: "",
   }));
   const milestone = detail.deadlines.find((m) => m.key === milestoneKey);
   const results = milestoneKey
@@ -158,6 +161,15 @@ export function CaseActionDialog({
           otherCompany: form.otherCompany,
           reason: form.reason,
         };
+      case "add_task":
+        return {
+          title: form.title,
+          detail: form.detail,
+          assignee: form.assignee,
+          dueDate: form.dueDate || undefined,
+        };
+      case "extend_deadline":
+        return { key: milestoneKey, date: form.dueDate, reason: form.reason };
       case "milestone":
         return {
           key: milestoneKey,
@@ -211,9 +223,11 @@ export function CaseActionDialog({
 
   return (
     <Modal
-      title={milestone ? milestone.label : ui.title}
+      title={action === "milestone" && milestone ? milestone.label : ui.title}
       description={
-        milestone ? `${milestone.detail}. ${milestone.basis}.` : ui.description
+        action === "milestone" && milestone
+          ? `${milestone.detail}. ${milestone.basis}.`
+          : ui.description
       }
       onClose={onClose}
       size={
@@ -631,6 +645,70 @@ export function CaseActionDialog({
                 hint="Se envía por el buzón seguro al cerrar la denuncia. Déjalo vacío para no enviar mensaje."
               />
             )}
+          </>
+        )}
+
+        {action === "add_task" && (
+          <>
+            <Field
+              label="Tarea"
+              required
+              maxLength={120}
+              {...bind("title")}
+              placeholder="Ej.: Pedir a TI el registro de accesos del sistema"
+            />
+            <TextArea
+              label="Detalle (opcional)"
+              rows={3}
+              maxLength={1000}
+              {...bind("detail")}
+            />
+            <div className="grid gap-5 sm:grid-cols-2">
+              <label className="block">
+                <span className="block text-sm font-medium text-gray-800">
+                  A cargo de
+                </span>
+                <div className="mt-2">
+                  <Select value={form.assignee!} onChange={set("assignee")}>
+                    <option value="case_manager">Gestor de denuncias</option>
+                    <option value="investigator">Investigador</option>
+                  </Select>
+                </div>
+              </label>
+              <Field
+                label="Plazo (opcional)"
+                type="date"
+                min={today()}
+                {...bind("dueDate")}
+              />
+            </div>
+          </>
+        )}
+
+        {action === "extend_deadline" && milestone && (
+          <>
+            <p className="rounded-lg bg-gray-50 px-3.5 py-2.5 text-sm text-gray-600 ring-1 ring-gray-200/70 ring-inset">
+              <strong className="text-gray-900">{milestone.label}</strong>
+              <br />
+              Plazo actual:{" "}
+              {milestone.dueAt ? formatDate(milestone.dueAt) : "sin plazo"}
+            </p>
+            <Field
+              label="Nuevo plazo"
+              type="date"
+              required
+              min={today()}
+              {...bind("dueDate")}
+            />
+            <TextArea
+              label="Motivo"
+              required
+              rows={3}
+              minLength={10}
+              maxLength={1000}
+              {...bind("reason")}
+              placeholder="Ej.: El testigo principal está con licencia médica hasta el 20 de octubre."
+            />
           </>
         )}
 

@@ -6,8 +6,9 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: postgres
+    # Solo accesible desde este computador (DBeaver, psql). Nunca expuesto a la red local.
     ports:
-      - "${DB_EXPOSED_PORT:-5432}:5432"
+      - "127.0.0.1:${DB_EXPOSED_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -26,7 +27,8 @@ services:
       PGADMIN_CONFIG_SERVER_MODE: "False"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
     ports:
-      - "5050:80"
+      # pgAdmin no pide login en modo escritorio: solo desde este computador.
+      - "127.0.0.1:5050:80"
     volumes:
       - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
       - pgadmin_data:/var/lib/pgadmin
@@ -43,8 +45,14 @@ services:
       DB_PORT: 5432
       # Archivos (logos y evidencias) en ./storage del proyecto. En producción: STORAGE_DRIVER=s3.
       STORAGE_DIR: /storage
+      # Correos: en desarrollo los atrapa Mailpit (http://localhost:8025). En producción: SMTP real (p. ej. Amazon SES).
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      # true = las empresas pueden usar servidores SMTP de la red interna (instalaciones propias). Por defecto, no.
+      ALLOW_PRIVATE_SMTP: ${ALLOW_PRIVATE_SMTP:-false}
     ports:
-      - "4000:4000"
+      # La app llega a la API por el proxy de Vite (/api); el puerto directo, solo desde este computador.
+      - "127.0.0.1:4000:4000"
     volumes:
       - ./Backend:/app
       - /app/node_modules
@@ -52,10 +60,14 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      mailpit:
+        condition: service_started
 
   frontend:
     build:
       context: ./Frontend
+      # «prod» = nginx con la app compilada y cabeceras de seguridad estrictas.
+      target: dev
     environment:
       API_PROXY_TARGET: http://backend:4000
       VITE_USE_POLLING: "true"
@@ -66,6 +78,13 @@ services:
       - /app/node_modules
     depends_on:
       - backend
+
+  # Buzón de prueba: recibe todos los correos que envía el backend (no salen a internet).
+  # Bandeja: http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "127.0.0.1:8025:8025"
 
   # S3 compatible (Adobe S3Mock) para probar el modo de producción en local (opcional):
   #   docker compose --profile s3 up -d s3   → endpoint http://s3:9090 dentro de Docker

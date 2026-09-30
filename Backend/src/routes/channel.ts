@@ -30,7 +30,9 @@ import {
 } from "../services/channel.js";
 import { resetMfa } from "../services/mfa.js";
 import { generateTemporaryPassword } from "../services/passwords.js";
+import { FLOW_FRAMEWORKS, DEFAULT_FLOW, flowConfigSchema, getFlowsOverview, isFlowFramework, saveTemplate } from "../services/flows.js";
 import { tenantAccounts } from "../services/tenants.js";
+import { mailRouter } from "./mail.js";
 
 /**
  * Panel del client_admin: /api/t/:slug/console/...
@@ -38,6 +40,16 @@ import { tenantAccounts } from "../services/tenants.js";
  */
 export const channelRouter = Router({ mergeParams: true });
 channelRouter.use(requireRole("client_admin"));
+
+// Correo saliente propio de la empresa (opcional; si no tiene, usa el de la plataforma).
+channelRouter.use(
+  "/mail",
+  mailRouter({
+    scope: (req) => ({ kind: "tenant", tenant: req.tenant! }),
+    organization: (req) => req.tenant!.name,
+    tenantSlug: (req) => req.tenant!.slug,
+  }),
+);
 
 /* ------------------------------------------------------------------ Validación */
 
@@ -346,6 +358,48 @@ channelRouter.put("/settings/portal", async (req, res) => {
   await saveSetting(req.tenant!, "portal", portal, req.actor!.id);
   await auditFor(req, { action: "settings.updated", targetType: "settings", targetLabel: "Portal del denunciante" });
   res.json({ portal });
+});
+
+/* ---------- Flujos de gestión (plantillas de la empresa; Ley Karin no se edita) */
+
+const FLOW_LABEL: Record<string, string> = {
+  ley_20393: "Delitos (Ley 20.393)",
+  ley_21719: "Datos personales (Ley 21.719)",
+  internal: "Normativa interna",
+};
+
+channelRouter.get("/flows", async (req, res) => {
+  res.json(await getFlowsOverview(req.tenant!));
+});
+
+channelRouter.put("/flows/:framework", async (req, res) => {
+  const framework = String(req.params.framework);
+  if (!isFlowFramework(framework)) {
+    throw new HttpError(400, `Solo se pueden editar: ${FLOW_FRAMEWORKS.join(", ")}. El procedimiento de Ley Karin lo fija la ley.`);
+  }
+  const body = z
+    .object({
+      config: flowConfigSchema,
+      note: z
+        .string()
+        .trim()
+        .max(300, "Máximo 300 caracteres")
+        .nullable()
+        .optional()
+        .transform((v) => v || null),
+      reset: z.boolean().optional(),
+    })
+    .parse(req.body);
+  const config = body.reset ? DEFAULT_FLOW : body.config;
+  const note = body.note ?? (body.reset ? "Se restauró el flujo recomendado" : null);
+  const version = await saveTemplate(req.tenant!, framework, config, note, req.actor!.id);
+  await auditFor(req, {
+    action: "flow.updated",
+    targetType: "settings",
+    targetLabel: `Flujo: ${FLOW_LABEL[framework]} (versión ${version})`,
+    metadata: { framework, version, note },
+  });
+  res.json(await getFlowsOverview(req.tenant!));
 });
 
 /* ---------- Marca de la empresa (logo y color) */

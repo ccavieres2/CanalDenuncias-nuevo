@@ -10,17 +10,20 @@ const RULES = [
 ];
 
 /**
- * Cambio de contraseña. Se usa en el login (contraseña temporal) y en "Mi cuenta".
- * El backend responde con una sesión nueva porque el cambio invalida las anteriores.
+ * Cambio de contraseña. Se usa en el login (contraseña temporal), en "Mi cuenta" y al recuperarla por correo
+ * (con `resetToken` en vez de sesión: no pide la contraseña actual).
+ * Con sesión, el backend responde con una nueva porque el cambio invalida las anteriores.
  */
 export function ChangePasswordForm({
   apiBase,
   token,
+  resetToken,
   submitLabel = "Cambiar contraseña",
   onChanged,
 }: {
   apiBase: string;
-  token: string;
+  token?: string;
+  resetToken?: string;
   submitLabel?: string;
   onChanged: (newToken: string) => void;
 }) {
@@ -32,7 +35,10 @@ export function ChangePasswordForm({
   const [loading, setLoading] = useState(false);
 
   const mismatch = confirm.length > 0 && confirm !== next;
-  const valid = RULES.every((r) => r.test(next)) && next === confirm && current.length > 0;
+  const valid =
+    RULES.every((r) => r.test(next)) &&
+    next === confirm &&
+    (resetToken !== undefined || current.length > 0);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -41,11 +47,22 @@ export function ChangePasswordForm({
     setFields({});
     setLoading(true);
     try {
-      const res = await api<{ token: string }>(`${apiBase}/auth/change-password`, {
-        method: "POST",
-        token,
-        body: { currentPassword: current, newPassword: next },
-      });
+      if (resetToken !== undefined) {
+        await api(`${apiBase}/auth/password-reset/complete`, {
+          method: "POST",
+          body: { resetToken, newPassword: next },
+        });
+        onChanged("");
+        return;
+      }
+      const res = await api<{ token: string }>(
+        `${apiBase}/auth/change-password`,
+        {
+          method: "POST",
+          token,
+          body: { currentPassword: current, newPassword: next },
+        },
+      );
       onChanged(res.token);
     } catch (err) {
       if (err instanceof ApiError && err.code === "invalid_current_password") {
@@ -61,15 +78,17 @@ export function ChangePasswordForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       {error && <Alert>{error}</Alert>}
-      <Field
-        label="Contraseña actual"
-        type="password"
-        autoComplete="current-password"
-        required
-        value={current}
-        error={fields.currentPassword}
-        onChange={(e) => setCurrent(e.target.value)}
-      />
+      {resetToken === undefined && (
+        <Field
+          label="Contraseña actual"
+          type="password"
+          autoComplete="current-password"
+          required
+          value={current}
+          error={fields.currentPassword}
+          onChange={(e) => setCurrent(e.target.value)}
+        />
+      )}
       <div>
         <Field
           label="Nueva contraseña"
@@ -84,15 +103,28 @@ export function ChangePasswordForm({
           {RULES.map((r) => {
             const ok = r.test(next);
             return (
-              <li key={r.label} className={`flex items-center gap-1.5 ${ok ? "text-emerald-700" : "text-gray-500"}`}>
+              <li
+                key={r.label}
+                className={`flex items-center gap-1.5 ${ok ? "text-emerald-700" : "text-gray-500"}`}
+              >
                 <span
                   className={`flex size-4 shrink-0 items-center justify-center rounded-full ${
                     ok ? "bg-emerald-500 text-white" : "bg-gray-200"
                   }`}
                 >
                   {ok && (
-                    <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <path d="m4 8.5 2.5 2.5L12 5.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <svg
+                      viewBox="0 0 16 16"
+                      className="size-3"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                    >
+                      <path
+                        d="m4 8.5 2.5 2.5L12 5.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
                     </svg>
                   )}
                 </span>
@@ -111,7 +143,13 @@ export function ChangePasswordForm({
         error={mismatch ? "Las contraseñas no coinciden" : undefined}
         onChange={(e) => setConfirm(e.target.value)}
       />
-      <Button type="submit" variant="primary" loading={loading} disabled={!valid} className="h-11 w-full sm:w-auto">
+      <Button
+        type="submit"
+        variant="primary"
+        loading={loading}
+        disabled={!valid}
+        className="h-11 w-full sm:w-auto"
+      >
         {submitLabel}
       </Button>
     </form>

@@ -1,3 +1,5 @@
+import { SESSION_MARKER } from "./session";
+
 export class ApiError extends Error {
   status: number;
   fields?: Record<string, string>;
@@ -15,6 +17,10 @@ export class ApiError extends Error {
 interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
+  /**
+   * Sesión del equipo: es el marcador "cookie" (la sesión real viaja sola en una cookie HttpOnly).
+   * Para el denunciante es su token de seguimiento, que se envía como Bearer y solo vive en memoria.
+   */
   token?: string | null;
 }
 
@@ -22,7 +28,7 @@ interface RequestOptions {
 export async function api<T>(path: string, { method = "GET", body, token }: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (token) headers.Authorization = `Bearer ${token}`;
+  if (token && token !== SESSION_MARKER) headers.Authorization = `Bearer ${token}`;
 
   let res: Response;
   try {
