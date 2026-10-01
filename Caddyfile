@@ -1,6 +1,16 @@
-# HTTPS automático para el dominio del canal (variable DOMAIN del .env). Redirige HTTP a HTTPS.
-# Sin directiva «log»: no se registran accesos (anonimato del denunciante).
+# HTTPS para el canal. Redirige HTTP a HTTPS. Sin directiva «log»: no se registran accesos (anonimato del denunciante).
+#
+# Variables del .env:
+#   DOMAIN     → la IP pública del servidor (demo) o el dominio real (p. ej., canal.tuempresa.cl).
+#   CADDY_TLS  → «internal»: certificado propio de Caddy (para una IP; el navegador lo advierte la primera vez).
+#                Un correo (p. ej., tu-correo@tuempresa.cl): certificado real de Let's Encrypt para el dominio.
+{
+	# Quien entra con la IP no envía nombre de servidor (SNI): se le entrega el certificado de DOMAIN.
+	default_sni {$DOMAIN}
+}
+
 {$DOMAIN} {
+	tls {$CADDY_TLS:internal}
 	encode zstd gzip
 	# Evidencias de hasta 10 MB (nginx y el backend validan el límite exacto).
 	request_body {
