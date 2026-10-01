@@ -8,12 +8,10 @@ Internet ─► Caddy (80/443, HTTPS automático) ─► nginx (app + /api) ─�
                                                                          └─► Mailpit (correos de la demo)
 ```
 
-- **HTTPS con la IP:** el canal queda en `https://98.81.72.190`. Como los certificados públicos (Let's Encrypt) se
-  emiten para dominios, Caddy usa un **certificado propio**: la conexión va cifrada, pero el navegador muestra una
-  advertencia la primera vez (ver [paso 7](#7-comprobar-la-conexión-segura)).
+- **HTTPS real con la IP:** el canal queda en `https://98.81.72.190` con un **certificado de Let's Encrypt para la IP**
+  (disponible desde 2026; dura unos 6 días y Caddy lo renueva solo). **Sin advertencias** en el navegador.
 - **Correos de la demo:** quedan atrapados en **Mailpit** (no salen a internet) y se ven por un túnel SSH.
-- **Más adelante, con el dominio de cPanel:** se cambian 4 líneas del `.env` y el certificado pasa a ser uno real, sin
-  advertencia (ver [paso 9](#9-cuando-tengan-el-dominio-cpanel)).
+- **Más adelante, con el dominio de cPanel:** se cambian 4 líneas del `.env` (ver [paso 9](#9-cuando-tengan-el-dominio-cpanel)).
 
 > **Solo para demos.** No cargar denuncias ni datos reales: la base y los archivos quedan dentro del EC2. Para
 > clientes reales, ver la sección 12 de [seguridad-tecnica.md](seguridad-tecnica.md) (RDS, S3, SES).
@@ -132,11 +130,11 @@ nano .env
 Pega esto y reemplaza los valores `<…>` (la IP ya está puesta):
 
 ```env
-# --- Dirección pública (HTTPS con la IP; certificado propio de Caddy) ---
+# --- Dirección pública (HTTPS con certificado de Let's Encrypt para la IP) ---
 DOMAIN=98.81.72.190
 APP_URL=https://98.81.72.190
 CORS_ORIGIN=https://98.81.72.190
-CADDY_TLS=internal
+CADDY_TLS=ip
 
 # --- Base de datos (PostgreSQL en Docker) ---
 DB_USER=canal
@@ -209,17 +207,16 @@ Debe terminar con **`API escuchando en http://localhost:4000`**.
 
 ## 7. Comprobar la conexión segura
 
-1. Abre **`https://98.81.72.190/admin/login`**.
-2. La primera vez el navegador mostrará **«La conexión no es privada»** (o «Advertencia de riesgo»). Es esperado: el
-   certificado lo emitió Caddy y no una autoridad pública, porque esas solo certifican dominios. **La conexión sí va
-   cifrada.**
-   - **Chrome / Edge:** *Configuración avanzada* → *Continuar a 98.81.72.190 (no seguro)*.
-   - **Firefox:** *Avanzado…* → *Aceptar el riesgo y continuar*.
-   - En ese navegador no vuelve a preguntar. Al mostrar la demo a un cliente, conviene hacer este paso antes.
-3. `http://98.81.72.190` redirige solo a `https://`.
-4. Entra con `GLOBAL_ADMIN_EMAIL` / `GLOBAL_ADMIN_PASSWORD`. Te pedirá **cambiar la contraseña** y **configurar el 2FA**
+1. Abre **`https://98.81.72.190/admin/login`**. Debe cargar **con candado** 🔒 y sin advertencias.
+   - El primer acceso puede tardar unos segundos: Caddy está pidiendo el certificado a Let's Encrypt.
+   - `http://98.81.72.190` redirige solo a `https://`.
+2. Entra con `GLOBAL_ADMIN_EMAIL` / `GLOBAL_ADMIN_PASSWORD`. Te pedirá **cambiar la contraseña** y **configurar el 2FA**
    (Google o Microsoft Authenticator).
-5. Ya con tu contraseña nueva, borra `GLOBAL_ADMIN_PASSWORD` del `.env` (`nano .env`): no se vuelve a usar.
+3. Ya con tu contraseña nueva, borra `GLOBAL_ADMIN_PASSWORD` del `.env` (`nano .env`): no se vuelve a usar.
+
+> **Plan B:** si Let's Encrypt no pudiera emitir el certificado (por ejemplo, puertos cerrados), pon `CADDY_TLS=internal`
+> y ejecuta `canal up -d`: Caddy usa un certificado propio. La conexión va cifrada, pero el navegador muestra
+> «La conexión no es privada» la primera vez (*Configuración avanzada → Continuar*).
 
 Si la página no carga, revisa los registros de Caddy:
 
@@ -227,7 +224,8 @@ Si la página no carga, revisa los registros de Caddy:
 docker compose -f docker-compose.prod.yml -f docker-compose.demo.yml logs caddy | tail -30
 ```
 
-Causas típicas: puertos 80/443 cerrados en el Security Group, o la IP del `.env` no coincide con la IP pública del EC2.
+Causas típicas: puertos 80/443 cerrados en el Security Group (Let's Encrypt necesita entrar por ambos), o la IP del
+`.env` no coincide con la IP pública del EC2.
 
 ---
 
@@ -300,8 +298,8 @@ Supongamos que el canal quedará en `canal.tuempresa.cl`.
    DOMAIN=canal.tuempresa.cl
    APP_URL=https://canal.tuempresa.cl
    CORS_ORIGIN=https://canal.tuempresa.cl
-   # Un correo en vez de «internal»: Caddy pide un certificado real a Let's Encrypt (avisos de vencimiento a ese correo)
-   CADDY_TLS=tu-correo@tuempresa.cl
+   # Certificado de Let's Encrypt para el dominio
+   CADDY_TLS=dominio
    ```
 
 4. Aplica el cambio:
@@ -310,7 +308,7 @@ Supongamos que el canal quedará en `canal.tuempresa.cl`.
    canal up -d
    ```
 
-   Caddy obtiene solo el certificado real del dominio: desde ahí, **sin advertencia** en el navegador.
+   Caddy obtiene solo el certificado del dominio.
 
 5. Los usuarios deberán volver a iniciar sesión (las sesiones son por dirección). Los datos se conservan.
 
@@ -326,8 +324,8 @@ Supongamos que el canal quedará en `canal.tuempresa.cl`.
 | Síntoma | Qué revisar |
 |---|---|
 | El sitio no carga | `canal ps` (¿todo `running`?) y el Security Group (puertos 80 y 443) |
-| Advertencia de certificado con la IP | Es esperada (certificado propio); ver paso 7. Con el dominio de cPanel desaparece |
-| Error de certificado con el dominio | `canal logs caddy`; que el registro A apunte a la IP y que `CADDY_TLS` sea un correo |
+| Sin candado o error de certificado | `canal logs caddy`: puertos 80/443 abiertos, `DOMAIN` igual a la IP pública y `CADDY_TLS=ip` (o `dominio` con el dominio) |
+| «La conexión no es privada» | Estás con `CADDY_TLS=internal` (plan B del paso 7); cambia a `ip` y ejecuta `canal up -d` |
 | «Ruta no encontrada» o error 502 | `canal logs backend`: puede estar arrancando o faltar una variable del `.env` |
 | No puedo iniciar sesión (vuelve al login) | `APP_URL` debe ser exactamente `https://98.81.72.190` (o el dominio) y entrar por esa misma dirección |
 | La compilación se cae por memoria | Verifica el swap (`free -h`) y vuelve a ejecutar el `up -d --build` |
@@ -342,5 +340,5 @@ Supongamos que el canal quedará en `canal.tuempresa.cl`.
 |---|---|
 | `docker-compose.prod.yml` | Servicios de producción: base, backend, frontend (nginx) y Caddy |
 | `docker-compose.demo.yml` | Agrega Mailpit para los correos de la demo |
-| `Caddyfile` | HTTPS (certificado propio con la IP o de Let's Encrypt con el dominio) y redirección a HTTPS, sin registros de acceso |
+| `Caddyfile` | HTTPS con Let's Encrypt (para la IP o el dominio, según `CADDY_TLS`) y redirección a HTTPS, sin registros de acceso |
 | `.env` | Configuración del servidor (**nunca se sube a GitHub**) |

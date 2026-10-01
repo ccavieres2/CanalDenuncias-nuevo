@@ -2,15 +2,34 @@
 #
 # Variables del .env:
 #   DOMAIN     → la IP pública del servidor (demo) o el dominio real (p. ej., canal.tuempresa.cl).
-#   CADDY_TLS  → «internal»: certificado propio de Caddy (para una IP; el navegador lo advierte la primera vez).
-#                Un correo (p. ej., tu-correo@tuempresa.cl): certificado real de Let's Encrypt para el dominio.
+#   CADDY_TLS  → cómo se obtiene el certificado:
+#                  ip        certificado real de Let's Encrypt para una IP (perfil «shortlived»: dura ~6 días y Caddy
+#                            lo renueva solo). Requiere los puertos 80 y 443 abiertos a internet.
+#                  dominio   certificado real de Let's Encrypt para un dominio (el registro A debe apuntar al servidor).
+#                  internal  certificado propio de Caddy (sin internet; el navegador lo advierte).
 {
 	# Quien entra con la IP no envía nombre de servidor (SNI): se le entrega el certificado de DOMAIN.
 	default_sni {$DOMAIN}
 }
 
+(tls_ip) {
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+}
+
+(tls_dominio) {
+	# Sin directiva tls: Caddy pide el certificado a Let's Encrypt automáticamente.
+}
+
+(tls_internal) {
+	tls internal
+}
+
 {$DOMAIN} {
-	tls {$CADDY_TLS:internal}
+	import tls_{$CADDY_TLS:ip}
 	encode zstd gzip
 	# Evidencias de hasta 10 MB (nginx y el backend validan el límite exacto).
 	request_body {

@@ -52,8 +52,8 @@ services:
     restart: unless-stopped
     environment:
       DOMAIN: ${DOMAIN}
-      # «internal» con una IP (certificado propio); un correo con un dominio real (Let's Encrypt).
-      CADDY_TLS: ${CADDY_TLS:-internal}
+      # ip (Let's Encrypt para la IP), dominio (Let's Encrypt para el dominio) o internal (certificado propio).
+      CADDY_TLS: ${CADDY_TLS:-ip}
     ports:
       - "80:80"
       - "443:443"
