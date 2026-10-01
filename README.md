@@ -38,6 +38,9 @@ Si ya tienes un PostgreSQL instalado en Windows usando el 5432, pon `DB_EXPOSED_
 **Producción:** `Backend/Dockerfile` y `Frontend/Dockerfile` tienen un target `prod` (el frontend es nginx con la app
 compilada, las cabeceras de seguridad y el proxy de `/api`). Ver la lista de configuración en [docs/seguridad-tecnica.md](docs/seguridad-tecnica.md).
 
+**Servidor de demos (EC2 con Docker y HTTPS):** paso a paso en [docs/despliegue-demo-ec2.md](docs/despliegue-demo-ec2.md)
+(`docker-compose.prod.yml` + `docker-compose.demo.yml` + `Caddyfile`).
+
 El primer global_admin se crea solo al arrancar si no existe ninguno
 (`GLOBAL_ADMIN_EMAIL` / `GLOBAL_ADMIN_PASSWORD` del `.env`).
 

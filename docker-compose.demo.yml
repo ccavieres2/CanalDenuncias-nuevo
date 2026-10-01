@@ -1,0 +1,19 @@
+# Complemento para servidores de DEMO (se suma a docker-compose.prod.yml):
+#   docker compose -f docker-compose.prod.yml -f docker-compose.demo.yml up -d --build
+#
+# Agrega Mailpit: los correos (recuperación de contraseña, alertas, pruebas de SMTP) quedan atrapados y no salen a
+# internet. Mailpit solo escucha en 127.0.0.1 del servidor: se ve con un túnel SSH (ver docs/despliegue-demo-ec2.md).
+services:
+  backend:
+    environment:
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+    depends_on:
+      mailpit:
+        condition: service_started
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
