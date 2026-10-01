@@ -1,0 +1,69 @@
+# Producción en un solo servidor (por ejemplo, un EC2): docker compose -f docker-compose.prod.yml up -d --build
+#
+#   Internet ─► caddy (80/443, HTTPS automático) ─► frontend (nginx: app + proxy /api) ─► backend ─► db
+#
+# Solo Caddy expone puertos. PostgreSQL, el backend y nginx quedan en la red interna de Docker.
+# Sin pgAdmin ni Mailpit. Más adelante, la base puede pasar a RDS y los archivos a S3 cambiando el .env.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ./Backend
+      target: prod
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      # Archivos (logos y evidencias) en un volumen. Con STORAGE_DRIVER=s3 en el .env se usa el bucket.
+      STORAGE_DIR: /storage
+    volumes:
+      - storage:/storage
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./Frontend
+      target: prod
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  # Certificado HTTPS automático (Let's Encrypt) para el dominio de DOMAIN en el .env.
+  # Caddy no guarda registros de acceso por defecto: no queda la IP de quien visita el portal.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  pgdata:
+  storage:
+  caddy_data:
+  caddy_config:

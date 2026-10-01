@@ -1,0 +1,10 @@
+# HTTPS automático para el dominio del canal (variable DOMAIN del .env). Redirige HTTP a HTTPS.
+# Sin directiva «log»: no se registran accesos (anonimato del denunciante).
+{$DOMAIN} {
+	encode zstd gzip
+	# Evidencias de hasta 10 MB (nginx y el backend validan el límite exacto).
+	request_body {
+		max_size 12MB
+	}
+	reverse_proxy frontend:8080
+}
