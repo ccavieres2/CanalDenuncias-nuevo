@@ -244,6 +244,14 @@ Menú de cada rol (las rutas de otro rol redirigen al inicio):
 - **Registro de accesos**: eventos `case.*` de la empresa, solo auditor (`GET /cases/access-log`).
 - **Documentos del canal**: política publicada, reglas de gestión y guías (`GET /cases/resources`).
 - **Mensajes**: conversaciones con los denunciantes y mensajes sin leer (`GET /cases/messages`).
+- **Expediente y envío a la DT** (Ley Karin, gestor): en los pasos «Aviso a la DT del inicio», «Envío del informe
+  final» y «Derivación a la DT» aparecen **Generar PDF** (`GET /cases/:id/dossier`: datos, relato, personas, plazos,
+  trazabilidad, mensajes y evidencias con su SHA-256) y **Enviar a la DT** (`POST /cases/:id/send-dt`: correo con el
+  PDF y las evidencias hasta 15 MB, y registra el hito como cumplido). Ambas acciones quedan en la auditoría.
+- **Chat en vivo**: con la ficha abierta, la conversación se actualiza sola cada 5 segundos (`GET /cases/:id/messages`,
+  sin auditar cada consulta: la apertura de la ficha ya quedó registrada). En el portal, el seguimiento abierto
+  consulta `POST /public/track/messages/poll` (límite propio, no renueva la sesión de 30 minutos). Ninguno consulta
+  con la pestaña oculta.
 
 ### Portal del denunciante y flujo de una denuncia
 

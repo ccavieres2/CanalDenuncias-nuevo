@@ -3,6 +3,7 @@ import { z } from "zod";
 import { HttpError } from "../errors.js";
 import { requireRole } from "../middleware/auth.js";
 import { getAlerts } from "../services/alerts.js";
+import { buildCaseDossier, sendDossierToDt } from "../services/case-dossier.js";
 import { audit, listAuditEvents } from "../services/audit.js";
 import {
   CASE_ACTIONS,
@@ -12,6 +13,7 @@ import {
   getChannelResources,
   getVisibleCase,
   getVisibleCaseFile,
+  getVisibleCaseMessages,
   listConversations,
   listDeadlines,
   listVisibleCases,
@@ -97,6 +99,14 @@ casesRouter.get("/:id", async (req, res) => {
 });
 
 /**
+ * Mensajes de una denuncia que ya está abierta en pantalla (la ficha los consulta cada pocos segundos). No se audita
+ * cada consulta: la apertura de la ficha ya quedó registrada como «case.viewed».
+ */
+casesRouter.get("/:id/messages", async (req, res) => {
+  res.json(await getVisibleCaseMessages(req.tenant!, req.actor!.id, roleOf(req.actor!.role), caseId(req.params.id)));
+});
+
+/**
  * Descarga de una evidencia del denunciante. Siempre como adjunto (nunca se muestra dentro de la app) y con el tipo
  * validado al subirla; cada descarga queda en la auditoría.
  */
@@ -121,6 +131,28 @@ casesRouter.get("/:id/files/:fileId", async (req, res) => {
     "X-Content-Type-Options": "nosniff",
   });
   res.send(body);
+});
+
+/** Expediente en PDF (datos, trazabilidad, mensajes y evidencias) para remitirlo a mano. La descarga se audita. */
+casesRouter.get("/:id/dossier", async (req, res) => {
+  const id = caseId(req.params.id);
+  const { code, pdf } = await buildCaseDossier(req.tenant!, req.actor!.id, roleOf(req.actor!.role), id, req.actor!.name);
+  await audit(req, { action: "case.dossier_exported", targetType: "case", targetId: id, targetLabel: code, tenantSlug: req.tenant!.slug });
+  res.set({
+    "Content-Type": "application/pdf",
+    "Content-Length": String(pdf.length),
+    "Content-Disposition": `attachment; filename="Expediente-${code}.pdf"`,
+    "Cache-Control": "no-store",
+  });
+  res.send(pdf);
+});
+
+/** Envía el expediente a la DT por correo y deja el hito registrado (Ley Karin, solo el gestor). */
+casesRouter.post("/:id/send-dt", requireRole("case_manager"), async (req, res) => {
+  const id = caseId(req.params.id);
+  const result = await sendDossierToDt(req.tenant!, req.actor!.id, roleOf(req.actor!.role), id, req.actor!.name, req.body);
+  await audit(req, { action: "case.sent_to_dt", targetType: "case", targetId: id, targetLabel: result.code, tenantSlug: req.tenant!.slug });
+  res.json(result);
 });
 
 /** Acciones del flujo (asignar, diligencias, proponer, aprobar, mensajes…). El servicio valida rol y estado. */

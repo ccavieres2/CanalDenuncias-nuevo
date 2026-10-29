@@ -8,11 +8,11 @@ import { ConsoleShell, type NavSection } from "./ConsoleShell";
 import { FullPageSpinner } from "./ui";
 
 const NAV: NavSection[] = [
-  { title: "General", items: [{ to: "/admin/overview", label: "Resumen", icon: "grid" }] },
+  { title: "General", items: [{ to: "/admin/overview", label: "Resumen", icon: "navHome" }] },
   {
     title: "Plataforma",
     items: [
-      { to: "/admin/tenants", label: "Empresas", icon: "building" },
+      { to: "/admin/tenants", label: "Empresas", icon: "navAreas" },
       { to: "/admin/plans", label: "Planes", icon: "archive" },
       { to: "/admin/usage", label: "Consumo", icon: "chart" },
     ],
@@ -20,9 +20,9 @@ const NAV: NavSection[] = [
   {
     title: "Administración",
     items: [
-      { to: "/admin/team", label: "Equipo BeeHives", icon: "users" },
-      { to: "/admin/audit", label: "Auditoría", icon: "activity" },
-      { to: "/admin/mail", label: "Correo saliente", icon: "mail" },
+      { to: "/admin/team", label: "Equipo BeeHives", icon: "navUsers" },
+      { to: "/admin/audit", label: "Auditoría", icon: "navAudit" },
+      { to: "/admin/mail", label: "Correo saliente", icon: "navMail" },
       { to: "/admin/system", label: "Estado del sistema", icon: "server" },
     ],
   },

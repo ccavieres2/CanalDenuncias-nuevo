@@ -5,6 +5,7 @@ import { Alert, Button, Field, Icon } from "../../components/ui";
 import { ApiError, api } from "../../lib/api";
 import { PUBLIC_STEPS, type ReporterView, usePortal } from "../../lib/portal";
 import { formatDate } from "../../lib/ui-helpers";
+import { usePolling } from "../../lib/use-polling";
 import { AuthenticatorSetup } from "./AuthenticatorSetup";
 import { ReporterFiles } from "./ReporterFiles";
 
@@ -25,6 +26,20 @@ export function PortalTrackPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+
+  // Con el seguimiento abierto, las respuestas del equipo aparecen solas (sin renovar la sesión ni recargar todo).
+  usePolling(
+    async () => {
+      if (!view) return;
+      const res = await api<Pick<ReporterView, "messages" | "canReply">>(`${apiBase}/track/messages/poll`, {
+        method: "POST",
+        body: { session: view.session },
+      });
+      setView((v) => (v && v.session === view.session ? { ...v, ...res } : v));
+    },
+    5000,
+    view !== null,
+  );
 
   async function open(e: FormEvent) {
     e.preventDefault();

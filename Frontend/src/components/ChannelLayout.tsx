@@ -20,7 +20,7 @@ function caseNav(role: CaseRole, base: string, plan: TenantPlan): NavSection[] {
   const resources = {
     title: "Recursos",
     items: [
-      { to: `${base}/flows`, label: "Flujo de denuncias", icon: "flow" as const },
+      { to: `${base}/flows`, label: "Flujo de denuncias", icon: "navCaseFlow" as const },
       { to: `${base}/resources`, label: "Documentos del canal", icon: "book" as const },
     ],
   };
@@ -53,7 +53,7 @@ function caseNav(role: CaseRole, base: string, plan: TenantPlan): NavSection[] {
         { title: "Denuncias", items: [inbox, deadlines] },
         {
           title: "Control",
-          items: [reports, { to: `${base}/access-log`, label: "Registro de accesos", icon: "activity" }],
+          items: [reports, { to: `${base}/access-log`, label: "Registro de accesos", icon: "navAudit" }],
         },
         resources,
       ];
@@ -62,7 +62,7 @@ function caseNav(role: CaseRole, base: string, plan: TenantPlan): NavSection[] {
 
 /** Menú según el rol activo. Solo el administrador del canal ve la configuración. */
 function navFor(user: ChannelUser, base: string, plan: TenantPlan): NavSection[] {
-  const home: NavSection = { title: "General", items: [{ to: base, label: "Inicio", icon: "grid", end: true }] };
+  const home: NavSection = { title: "General", items: [{ to: base, label: "Inicio", icon: "navHome", end: true }] };
   const sections: NavSection[] =
     user.activeRole !== "client_admin" ? [home, ...caseNav(user.activeRole as CaseRole, base, plan)] : adminNav(base, plan, home);
   // Lo que el plan no incluye no aparece; una sección que queda vacía tampoco.
@@ -77,18 +77,18 @@ function adminNav(base: string, plan: TenantPlan, home: NavSection): NavSection[
     {
       title: "Configuración del canal",
       items: [
-        { to: `${base}/users`, label: "Usuarios y roles", icon: "users" },
-        { to: `${base}/areas`, label: "Áreas", icon: "building" },
-        { to: `${base}/categories`, label: "Categorías", icon: "grid" },
-        { to: `${base}/portal`, label: "Portal del denunciante", icon: "external" },
-        { to: `${base}/branding`, label: "Marca", icon: "palette", hidden: !planHas(plan, "branding") },
-        { to: `${base}/mail`, label: "Correo saliente", icon: "mail", hidden: !planHas(plan, "custom_smtp") },
-        { to: `${base}/settings`, label: "Reglas de gestión", icon: "settings" },
-        { to: `${base}/flow-settings`, label: "Flujos de gestión", icon: "flow", hidden: !planHas(plan, "custom_flows") },
+        { to: `${base}/users`, label: "Usuarios y roles", icon: "navUsers" },
+        { to: `${base}/areas`, label: "Áreas", icon: "navAreas" },
+        { to: `${base}/categories`, label: "Categorías", icon: "navCategories" },
+        { to: `${base}/portal`, label: "Portal del denunciante", icon: "navPortal" },
+        { to: `${base}/branding`, label: "Marca", icon: "navBrand", hidden: !planHas(plan, "branding") },
+        { to: `${base}/mail`, label: "Correo saliente", icon: "navMail", hidden: !planHas(plan, "custom_smtp") },
+        { to: `${base}/settings`, label: "Reglas de gestión", icon: "navRules" },
+        { to: `${base}/flow-settings`, label: "Flujos de gestión", icon: "navFlows", hidden: !planHas(plan, "custom_flows") },
       ],
     },
-    { title: "Control", items: [{ to: `${base}/audit`, label: "Auditoría", icon: "activity" }] },
-    { title: "Recursos", items: [{ to: `${base}/flows`, label: "Flujo de denuncias", icon: "flow" }] },
+    { title: "Control", items: [{ to: `${base}/audit`, label: "Auditoría", icon: "navAudit" }] },
+    { title: "Recursos", items: [{ to: `${base}/flows`, label: "Flujo de denuncias", icon: "navCaseFlow" }] },
   ];
 }
 

@@ -54,6 +54,8 @@ export type AuditAction =
   | "area.categories_updated"
   | "case.viewed"
   | "case.file_downloaded"
+  | "case.dossier_exported"
+  | "case.sent_to_dt"
   | "case.start_review"
   | "case.reclassify"
   | "case.involve"

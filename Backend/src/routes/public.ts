@@ -14,6 +14,7 @@ import {
   authenticatorRemove,
   authenticatorSetup,
   getPublicPortal,
+  getReporterMessages,
   getReporterView,
   submitReport,
 } from "../services/cases.js";
@@ -116,6 +117,15 @@ publicRouter.post("/track", trackLimiter, async (req, res) => {
 
 publicRouter.post("/track/view", trackLimiter, async (req, res) => {
   res.json(await withSession(req.tenant, sessionCase(req)));
+});
+
+// La página de seguimiento abierta consulta los mensajes nuevos cada pocos segundos: límite propio, más holgado que
+// el de ingreso (no sirve para adivinar claves, porque exige una sesión válida). No renueva la sesión: mirar la
+// pantalla no cuenta como actividad, así la sesión sigue venciendo en un computador compartido.
+const pollLimiter = limiter(300, 15, "Demasiadas consultas. Espera unos minutos.");
+
+publicRouter.post("/track/messages/poll", pollLimiter, async (req, res) => {
+  res.json(await getReporterMessages(req.tenant!, sessionCase(req)));
 });
 
 publicRouter.post("/track/messages", trackLimiter, async (req, res) => {

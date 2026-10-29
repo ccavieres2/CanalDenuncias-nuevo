@@ -2,6 +2,7 @@ import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 
 import { Link, NavLink } from "react-router";
 import { initials } from "../lib/ui-helpers";
 import { Brand, BrandLogo, BrandMark } from "./Brand";
+import { MenuIcon, type NavIconName } from "./NavIcon";
 import { Avatar, Icon } from "./ui";
 
 type IconName = Parameters<typeof Icon>[0]["name"];
@@ -9,7 +10,8 @@ type IconName = Parameters<typeof Icon>[0]["name"];
 export interface NavSection {
   title: string;
   /** hidden: el ítem no se muestra (por ejemplo, un módulo que el plan de la empresa no incluye). */
-  items: { to: string; label: string; icon: IconName; end?: boolean; hidden?: boolean }[];
+  /** icon: un ícono del menú (NavIcon, diseño BeeHives) o, si no tiene uno propio, un ícono general (Icon). */
+  items: { to: string; label: string; icon: NavIconName | IconName; end?: boolean; hidden?: boolean }[];
 }
 
 /** Roles entre los que la persona puede cambiar (solo si tiene más de uno). */
@@ -197,7 +199,7 @@ function Sidebar({
                   {({ isActive }) => (
                     <>
                       {isActive && <span className="absolute inset-y-2 -left-3 w-1 rounded-r-full bg-nav-accent" />}
-                      <Icon name={item.icon} className={`size-[18px] ${isActive ? "text-nav-accent" : ""}`} />
+                      <MenuIcon name={item.icon} className={`size-5 shrink-0 ${isActive ? "text-nav-accent" : ""}`} />
                       {item.label}
                     </>
                   )}

@@ -14,6 +14,8 @@ import {
 } from "../../components/ui";
 import { ApiError, api, downloadFile } from "../../lib/api";
 import { ACTION_UI } from "../../lib/case-actions";
+import { usePolling } from "../../lib/use-polling";
+import { SendToDtDialog } from "./SendToDtDialog";
 import {
   CASE_VIEW,
   type CaseAction,
@@ -204,6 +206,8 @@ export function CaseDetailPage() {
     milestoneKey?: string;
   } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [sendDt, setSendDt] = useState<{ key: string; label: string } | null>(null);
+  const [dossierBusy, setDossierBusy] = useState(false);
 
   useEffect(() => {
     api<CaseResponse>(`${apiBase}/cases/${id}`, { token })
@@ -221,6 +225,16 @@ export function CaseDetailPage() {
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
 
+  // Con la ficha abierta, los mensajes nuevos del denunciante aparecen solos. El auditor no ve la conversación.
+  usePolling(
+    async () => {
+      const res = await api<Pick<CaseResponse, "messages">>(`${apiBase}/cases/${id}/messages`, { token });
+      setData((d) => (d && d.case.id === id ? { ...d, messages: res.messages } : d));
+    },
+    5000,
+    data !== null && role !== "auditor",
+  );
+
   async function sendMessage(body: string) {
     await api(`${apiBase}/cases/${id}/actions/message`, {
       method: "POST",
@@ -228,6 +242,18 @@ export function CaseDetailPage() {
       body: { body },
     });
     reload();
+  }
+
+  async function downloadDossier() {
+    setDossierBusy(true);
+    setError(null);
+    try {
+      await downloadFile(`${apiBase}/cases/${id}/dossier`, `Expediente-${data?.case.code ?? id}.pdf`, token);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "No se pudo generar el PDF");
+    } finally {
+      setDossierBusy(false);
+    }
   }
 
   const crumbs = [
@@ -791,6 +817,15 @@ export function CaseDetailPage() {
             onExtend={(key) =>
               setDialog({ action: "extend_deadline", milestoneKey: key })
             }
+            dt={
+              role === "case_manager" && c.category.framework === "ley_karin"
+                ? {
+                    onDossier: downloadDossier,
+                    dossierBusy,
+                    onSend: (m) => setSendDt({ key: m.key, label: m.label }),
+                  }
+                : undefined
+            }
             onAddTask={
               c.actions.includes("add_task")
                 ? () => setDialog({ action: "add_task" })
@@ -799,6 +834,23 @@ export function CaseDetailPage() {
           />
         </aside>
       </div>
+
+      {sendDt && (
+        <SendToDtDialog
+          apiBase={apiBase}
+          caseId={id}
+          token={token}
+          milestone={sendDt}
+          filesCount={data.files.length}
+          onClose={() => setSendDt(null)}
+          onDone={(summary) => {
+            setSendDt(null);
+            setFlash(summary);
+            reload();
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          }}
+        />
+      )}
 
       {dialog && (
         <CaseActionDialog
@@ -843,6 +895,9 @@ const SOURCE_TAG: Record<
   },
 };
 
+// Pasos de Ley Karin que consisten en remitir antecedentes a la DT (los mismos del backend).
+const DT_SEND_KEYS = ["dt_start_notice", "dt_report", "dt_referral"];
+
 function ProcedurePanel({
   milestones,
   framework,
@@ -850,6 +905,7 @@ function ProcedurePanel({
   onRegister,
   onExtend,
   onAddTask,
+  dt,
 }: {
   milestones: Milestone[];
   framework: string;
@@ -857,6 +913,8 @@ function ProcedurePanel({
   onRegister: (key: string) => void;
   onExtend: (key: string) => void;
   onAddTask?: () => void;
+  /** Ley Karin, gestor: generar el expediente y enviarlo a la DT en los pasos que se le remiten. */
+  dt?: { onDossier: () => void; dossierBusy: boolean; onSend: (m: Milestone) => void };
 }) {
   const flowNote =
     framework === "ley_karin"
@@ -977,6 +1035,25 @@ function ProcedurePanel({
                 </p>
                 {(m.canRegister || m.canExtend) && (
                   <div className="mt-2 flex flex-wrap gap-2">
+                    {dt && m.canRegister && DT_SEND_KEYS.includes(m.key) && (
+                      <>
+                        <button
+                          onClick={dt.onDossier}
+                          disabled={dt.dossierBusy}
+                          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-gray-600 ring-1 ring-line ring-inset transition hover:bg-gray-50 disabled:opacity-60"
+                        >
+                          <Icon name="download" className="size-3" />
+                          {dt.dossierBusy ? "Generando…" : "Generar PDF"}
+                        </button>
+                        <button
+                          onClick={() => dt.onSend(m)}
+                          className="inline-flex items-center gap-1.5 rounded-md bg-highlight px-2 py-1 text-xs font-semibold text-white transition hover:opacity-90"
+                        >
+                          <Icon name="mail" className="size-3" />
+                          Enviar a la DT
+                        </button>
+                      </>
+                    )}
                     {m.canRegister && (
                       <button
                         onClick={() => onRegister(m.key)}

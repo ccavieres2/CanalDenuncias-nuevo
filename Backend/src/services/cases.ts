@@ -653,6 +653,33 @@ export async function getVisibleCase(tenant: Tenant, userId: string, role: CaseR
 }
 
 /**
+ * Solo la conversación de una denuncia, para que la ficha abierta reciba los mensajes nuevos sin recargar todo.
+ * Mismas reglas de visibilidad que la ficha (incluido el conflicto de interés) y exige acceso al contenido.
+ */
+export async function getVisibleCaseMessages(tenant: Tenant, userId: string, role: CaseRole, id: string) {
+  const ctx = await loadContext(tenant, userId);
+  const pool = tenantPool(tenant);
+  const { c, milestones } = await findVisibleCase(ctx, role, id, pool);
+  if (!BASE_PERMISSIONS[role].viewContent) throw new HttpError(404, "Denuncia no encontrada");
+
+  const { actions } = availableActions(role, c, ctx, milestones);
+  if (actions.includes("message")) {
+    await pool.query("UPDATE case_messages SET read_at = now() WHERE case_id = $1 AND sender = 'reporter' AND read_at IS NULL", [id]);
+  }
+  const messages = await pool.query<MessageRow>("SELECT * FROM case_messages WHERE case_id = $1 ORDER BY created_at, id", [id]);
+  return {
+    messages: messages.rows.map((m) => ({
+      id: m.id,
+      sender: m.sender,
+      author: m.sender === "reporter" ? "Denunciante" : (ctx.users.find((u) => u.id === m.author_user_id)?.name ?? "Equipo del canal"),
+      body: m.body,
+      createdAt: m.created_at,
+      readAt: m.read_at,
+    })),
+  };
+}
+
+/**
  * Descarga de una evidencia: exige ver la denuncia con el rol activo (mismas reglas que la ficha, incluido el
  * conflicto de interés) y un rol con acceso al contenido. El auditor no descarga archivos.
  */
@@ -1621,6 +1648,24 @@ export async function authenticateByAuthenticator(tenant: Tenant, code: string, 
     step,
   ]);
   return row.id;
+}
+
+/** Solo la conversación del seguimiento, para que el portal abierto reciba las respuestas del equipo sin recargar. */
+export async function getReporterMessages(tenant: Tenant, caseId: string) {
+  const c = await caseById(tenant, caseId);
+  const pool = tenantPool(tenant);
+  await pool.query("UPDATE case_messages SET read_at = now() WHERE case_id = $1 AND sender = 'staff' AND read_at IS NULL", [c.id]);
+  const messages = await pool.query<MessageRow>("SELECT * FROM case_messages WHERE case_id = $1 ORDER BY created_at, id", [c.id]);
+  return {
+    canReply: c.status !== "closed",
+    messages: messages.rows.map((m) => ({
+      id: m.id,
+      sender: m.sender,
+      body: m.body,
+      createdAt: m.created_at,
+      readAt: m.sender === "reporter" ? m.read_at : null,
+    })),
+  };
 }
 
 /** Seguimiento del denunciante. Marca como leídos los mensajes del equipo. */

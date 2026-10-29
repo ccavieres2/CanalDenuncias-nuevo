@@ -53,6 +53,8 @@ export const AUDIT_ACTIONS: Record<string, { label: string; tone: AuditTone }> =
   "area.categories_updated": { label: "Cambió las categorías autorizadas de un área", tone: "neutral" },
   "case.viewed": { label: "Abrió una denuncia", tone: "neutral" },
   "case.file_downloaded": { label: "Descargó una evidencia", tone: "neutral" },
+  "case.dossier_exported": { label: "Descargó el expediente en PDF", tone: "neutral" },
+  "case.sent_to_dt": { label: "Envió el expediente a la DT", tone: "neutral" },
   "case.start_review": { label: "Inició la revisión de una denuncia", tone: "neutral" },
   "case.reclassify": { label: "Reclasificó una denuncia", tone: "neutral" },
   "case.involve": { label: "Actualizó el conflicto de interés de una denuncia", tone: "warning" },

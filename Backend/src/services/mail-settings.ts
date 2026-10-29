@@ -262,6 +262,8 @@ export interface OutgoingMail {
   subject: string;
   text: string;
   html: string;
+  /** Adjuntos (p. ej. el expediente para la DT). */
+  attachments?: { filename: string; content: Buffer; contentType?: string }[];
 }
 
 export interface Sender {
