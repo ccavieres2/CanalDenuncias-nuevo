@@ -6,6 +6,7 @@ import { findAccount, globalAccounts, setAccountActive, setPassword } from "../s
 import { audit, listAuditEvents } from "../services/audit.js";
 import { hashPassword } from "../services/auth.js";
 import { resetMfa } from "../services/mfa.js";
+import { sendCredentials } from "../services/notifications.js";
 import { generateTemporaryPassword } from "../services/passwords.js";
 import { getOverview, getSystemStatus } from "../services/system.js";
 import { listUsage, tenantUsage } from "../services/usage.js";
@@ -204,7 +205,14 @@ adminRouter.post("/tenants", async (req, res) => {
     tenantSlug: tenant.slug,
     metadata: { initialAdmin: credentials.email },
   });
-  res.status(201).json({ tenant: publicTenant(tenant), credentials });
+  const emailSent = await sendCredentials(
+    { tenant, organization: tenant.name },
+    { email: credentials.email, name: input.admin.name },
+    credentials.temporaryPassword,
+    `/${tenant.slug}/login`,
+    "created",
+  );
+  res.status(201).json({ tenant: publicTenant(tenant), credentials: { ...credentials, emailSent } });
 });
 
 /** Consumo por empresa (denuncias, archivos y base de datos), para precios y capacidad. Solo cifras. */
@@ -335,7 +343,14 @@ adminRouter.post("/tenants/:slug/admins", async (req, res) => {
     targetLabel: admin.email,
     tenantSlug: tenant.slug,
   });
-  res.status(201).json({ admin, credentials });
+  const emailSent = await sendCredentials(
+    { tenant, organization: tenant.name },
+    admin,
+    credentials.temporaryPassword,
+    `/${tenant.slug}/login`,
+    "created",
+  );
+  res.status(201).json({ admin, credentials: { ...credentials, emailSent } });
 });
 
 adminRouter.patch("/tenants/:slug/admins/:id", async (req, res) => {
@@ -356,7 +371,8 @@ adminRouter.post("/tenants/:slug/admins/:id/reset-password", async (req, res) =>
   const temporaryPassword = generateTemporaryPassword();
   await setPassword(tenantAccounts(tenant), admin.id, await hashPassword(temporaryPassword), true);
   await audit(req, { action: "client_admin.password_reset", ...auditTarget });
-  res.json({ credentials: { email: admin.email, temporaryPassword } });
+  const emailSent = await sendCredentials({ tenant, organization: tenant.name }, admin, temporaryPassword, `/${tenant.slug}/login`, "reset");
+  res.json({ credentials: { email: admin.email, temporaryPassword, emailSent } });
 });
 
 /** Para un client_admin que perdió su teléfono: en su próximo login configurará el 2FA de nuevo. */
@@ -391,7 +407,8 @@ adminRouter.post("/team", async (req, res) => {
     targetId: member.id,
     targetLabel: member.email,
   });
-  res.status(201).json({ member, credentials });
+  const emailSent = await sendCredentials({ organization: "BeeHives" }, member, credentials.temporaryPassword, "/admin/login", "created");
+  res.status(201).json({ member, credentials: { ...credentials, emailSent } });
 });
 
 adminRouter.patch("/team/:id", async (req, res) => {
@@ -409,7 +426,8 @@ adminRouter.post("/team/:id/reset-password", async (req, res) => {
   const temporaryPassword = generateTemporaryPassword();
   await setPassword(globalAccounts, member.id, await hashPassword(temporaryPassword), true);
   await audit(req, { action: "global_admin.password_reset", ...auditTarget });
-  res.json({ credentials: { email: member.email, temporaryPassword } });
+  const emailSent = await sendCredentials({ organization: "BeeHives" }, member, temporaryPassword, "/admin/login", "reset");
+  res.json({ credentials: { email: member.email, temporaryPassword, emailSent } });
 });
 
 adminRouter.post("/team/:id/reset-mfa", async (req, res) => {

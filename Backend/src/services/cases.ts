@@ -35,6 +35,7 @@ import {
 import { hasFeature, hasFramework, planOf, requireFeature, requireFramework } from "./plans.js";
 import { type ConflictCheck, detectConflicts } from "./conflicts.js";
 import { layout, sendMail } from "./mail.js";
+import { notify, notifyLater } from "./notifications.js";
 import { normalizeRut } from "./rut.js";
 import { decryptSecret, encryptSecret, sha256 } from "./secrets.js";
 import { type Tenant, tenantPool } from "./tenants.js";
@@ -300,6 +301,86 @@ export async function ensureCoverage(tenant: Tenant, c: Pick<CaseRow, "id" | "co
     },
     { tenant, organization: tenant.name },
   ).catch((err) => console.error(`[conflicto] no se pudo avisar al contacto externo de ${tenant.slug}:`, err));
+}
+
+/* ------------------------------------------------------------------ Avisos por correo */
+
+type CaseNotice = "new" | "assigned" | "reporter_message" | "resolution";
+
+/**
+ * Avisa por correo a quien le toca actuar. Solo el código y el enlace (sin relato ni nombres). Las denuncias de
+ * ejemplo no generan avisos. Quien está involucrado en la denuncia nunca recibe el aviso.
+ */
+async function notifyCase(tenant: Tenant, caseId: string, kind: CaseNotice): Promise<void> {
+  const c = (await tenantPool(tenant).query<CaseRow>("SELECT * FROM cases WHERE id = $1", [caseId])).rows[0];
+  if (!c || c.is_demo) return;
+  const [users, categories, settings] = await Promise.all([listUsers(tenant), listCategories(tenant), getSettings(tenant)]);
+  const category = categories.find((x) => x.id === c.category_id);
+  const karin = category?.legal_framework === "ley_karin";
+  const path = `/${tenant.slug}/cases/${c.id}`;
+  const managers = () => {
+    const available = availableManagers(c, users, categories);
+    if (available.length) return available;
+    // Plan ante conflicto de interés: si todos están excluidos, el suplente.
+    const substitute = users.find((u) => u.id === settings.caseRules.conflictPlan.substituteUserId);
+    return substitute && substitute.is_active && !c.involved_user_ids.includes(substitute.id) ? [substitute] : [];
+  };
+  const investigator = users.find((u) => u.id === c.investigator_id && u.is_active && !c.involved_user_ids.includes(u.id));
+
+  switch (kind) {
+    case "new": {
+      const urgent = c.urgent_protection;
+      const prefix = urgent ? "URGENTE: " : karin ? "Ley Karin: " : "";
+      await notify(tenant, managers(), {
+        subject: `${prefix}nueva denuncia ${c.code}`,
+        title: urgent ? "Denuncia con protección urgente" : "Nueva denuncia en el canal",
+        paragraphs: [
+          `Llegó la denuncia ${c.code}${category ? ` (${category.name})` : ""} a una de tus categorías.`,
+          ...(urgent ? ["La persona pidió medidas de protección urgentes: revísala cuanto antes."] : []),
+          ...(karin ? ["Es de Ley Karin: tienes 3 días hábiles para iniciar la investigación o derivarla a la DT."] : []),
+        ],
+        path,
+      });
+      return;
+    }
+    case "assigned":
+      if (!investigator) return;
+      await notify(tenant, [investigator], {
+        subject: `Te asignaron la denuncia ${c.code}`,
+        title: "Te asignaron una denuncia",
+        paragraphs: [`Quedaste a cargo de la investigación de la denuncia ${c.code}${category ? ` (${category.name})` : ""}.`],
+        path,
+      });
+      return;
+    case "reporter_message": {
+      // Lo lee quien conversa con el denunciante: el investigador si está investigando; si no, los gestores.
+      const to = investigator && c.status === "investigating" ? [investigator] : managers();
+      await notify(tenant, to, {
+        subject: `Nuevo mensaje del denunciante en ${c.code}`,
+        title: "El denunciante te escribió",
+        paragraphs: [`Hay un mensaje nuevo del denunciante en la denuncia ${c.code}.`],
+        path,
+      });
+      return;
+    }
+    case "resolution": {
+      const resolvers = users.filter(
+        (u) =>
+          u.is_active &&
+          u.roles.includes("resolver") &&
+          !c.involved_user_ids.includes(u.id) &&
+          !!category &&
+          effectiveCategories(u, [category]).length > 0,
+      );
+      await notify(tenant, resolvers, {
+        subject: `Denuncia ${c.code} por resolver`,
+        title: "Hay una denuncia por resolver",
+        paragraphs: [`La denuncia ${c.code} tiene una conclusión propuesta y espera tu aprobación o rechazo.`],
+        path,
+      });
+      return;
+    }
+  }
 }
 
 async function loadContext(tenant: Tenant, userId: string) {
@@ -1191,6 +1272,10 @@ export async function applyCaseAction<A extends CaseAction>(
 
     await client.query("COMMIT");
     if (coverageCheck) await ensureCoverage(tenant, coverageCheck);
+    // Aviso por correo a quien le toca actuar ahora.
+    const notice: CaseNotice | null =
+      action === "assign" ? "assigned" : action === "propose" || action === "dismiss" ? "resolution" : null;
+    if (notice) notifyLater(() => notifyCase(tenant, c.id, notice));
     return { code: c.code, summary };
   } catch (err) {
     await client.query("ROLLBACK");
@@ -1416,6 +1501,7 @@ export async function registerCase(tenant: Tenant, userId: string, raw: unknown)
      VALUES ($1, $2, 'case_manager', $3, $4, $5, 'event')`,
     [res.rows[0]!.id, actor, ctx.me.id, ORIGIN_EVENT[input.origin], input.originDetail ?? null],
   );
+  notifyLater(() => notifyCase(tenant, res.rows[0]!.id, "new"));
   return { id: res.rows[0]!.id, code, trackingKey };
 }
 
@@ -1592,6 +1678,7 @@ export async function submitReport(tenant: Tenant, raw: unknown): Promise<{ id: 
         .join(" "),
     ],
   );
+  notifyLater(() => notifyCase(tenant, res.rows[0]!.id, "new"));
   return { id: res.rows[0]!.id, code, trackingKey };
 }
 
@@ -1736,6 +1823,7 @@ export async function addReporterMessage(tenant: Tenant, caseId: string, body: s
     "INSERT INTO case_events (case_id, actor_label, action, kind) VALUES ($1, 'Denunciante', 'Mensaje del denunciante', 'message')",
     [c.id],
   );
+  notifyLater(() => notifyCase(tenant, c.id, "reporter_message"));
 }
 
 /**

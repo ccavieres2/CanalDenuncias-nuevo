@@ -135,6 +135,12 @@ export function CredentialsModal({
             </button>
           </div>
         </dl>
+        {credentials.emailSent !== undefined &&
+          (credentials.emailSent ? (
+            <Alert type="success">Enviamos estos datos de acceso por correo a {credentials.email}.</Alert>
+          ) : (
+            <Alert>No se pudo enviar el correo con los datos de acceso: entrégalos tú.</Alert>
+          ))}
         <Alert type="info">
           Entrégala por un canal seguro. Al ingresar, la persona deberá cambiarla y configurar la verificación en dos
           pasos.

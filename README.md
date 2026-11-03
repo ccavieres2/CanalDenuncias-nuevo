@@ -250,6 +250,11 @@ Menú de cada rol (las rutas de otro rol redirigen al inicio):
   con los pasos y datos del formulario. La DT no recibe estos trámites por correo: se suben en el SUAC
   (tramitesjuridico.dt.gob.cl, Clave Única del representante laboral electrónico) y luego se registra el paso. La
   descarga queda en la auditoría.
+- **Avisos por correo** (`services/notifications.ts`): denuncia nueva → gestores de esa categoría (asunto «URGENTE» si
+  pide protección urgente; Ley Karin recuerda los 3 días hábiles); asignación → investigador; mensaje del denunciante →
+  investigador o gestores; conclusión o desestimación propuesta → comité. Solo código y enlace, nunca relato ni nombres;
+  las denuncias de ejemplo no avisan. Al crear o restablecer una cuenta se envían usuario, contraseña temporal y enlace
+  (además de mostrarse en pantalla). Los plazos vencidos o por vencer van en el resumen diario (desde las 8:00).
 - **Chat en vivo**: con la ficha abierta, la conversación se actualiza sola cada 5 segundos (`GET /cases/:id/messages`,
   sin auditar cada consulta: la apertura de la ficha ya quedó registrada). En el portal, el seguimiento abierto
   consulta `POST /public/track/messages/poll` (límite propio, no renueva la sesión de 30 minutos). Ninguno consulta

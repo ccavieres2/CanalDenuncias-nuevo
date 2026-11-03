@@ -30,6 +30,7 @@ import {
   updateUser,
 } from "../services/channel.js";
 import { resetMfa } from "../services/mfa.js";
+import { sendCredentials } from "../services/notifications.js";
 import { generateTemporaryPassword } from "../services/passwords.js";
 import { FLOW_FRAMEWORKS, DEFAULT_FLOW, flowConfigSchema, getFlowsOverview, isFlowFramework, saveTemplate } from "../services/flows.js";
 import { type Tenant, tenantAccounts } from "../services/tenants.js";
@@ -243,7 +244,14 @@ channelRouter.post("/users", async (req, res) => {
     targetLabel: user.email,
     metadata: { roles: user.roles },
   });
-  res.status(201).json({ user, credentials });
+  const emailSent = await sendCredentials(
+    { tenant: req.tenant!, organization: req.tenant!.name },
+    user,
+    credentials.temporaryPassword,
+    `/${req.tenant!.slug}/login`,
+    "created",
+  );
+  res.status(201).json({ user, credentials: { ...credentials, emailSent } });
 });
 
 channelRouter.patch("/users/:id", async (req, res) => {
@@ -286,7 +294,14 @@ channelRouter.post("/users/:id/reset-password", async (req, res) => {
   const temporaryPassword = generateTemporaryPassword();
   await setPassword(tenantAccounts(req.tenant!), user.id, await hashPassword(temporaryPassword), true);
   await auditFor(req, { action: "user.password_reset", ...auditTarget });
-  res.json({ credentials: { email: user.email, temporaryPassword } });
+  const emailSent = await sendCredentials(
+    { tenant: req.tenant!, organization: req.tenant!.name },
+    user,
+    temporaryPassword,
+    `/${req.tenant!.slug}/login`,
+    "reset",
+  );
+  res.json({ credentials: { email: user.email, temporaryPassword, emailSent } });
 });
 
 channelRouter.post("/users/:id/reset-mfa", async (req, res) => {

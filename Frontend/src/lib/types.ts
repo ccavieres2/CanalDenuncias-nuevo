@@ -56,6 +56,8 @@ export type TeamMember = ManagedAccount;
 export interface Credentials {
   email: string;
   temporaryPassword: string;
+  /** Si además se enviaron por correo a la persona. */
+  emailSent?: boolean;
 }
 
 export interface AuditEvent {
