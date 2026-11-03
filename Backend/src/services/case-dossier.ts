@@ -1,22 +1,15 @@
+import JSZip from "jszip";
 import PDFDocument from "pdfkit";
-import { z } from "zod";
 import { HttpError } from "../errors.js";
 import { readCaseFile } from "./case-files.js";
-import { type CaseRole, applyCaseAction, getVisibleCase } from "./cases.js";
-import { sendMail } from "./mail.js";
+import { type CaseRole, getVisibleCase } from "./cases.js";
 import type { Tenant } from "./tenants.js";
 
 /**
  * Expediente de una denuncia en PDF: datos, relato, personas, plazos, trazabilidad, mensajes y evidencias (con su
- * huella SHA-256 para acreditar su integridad). Sirve para remitir la denuncia a la Dirección del Trabajo, por
- * correo desde el canal o a mano (descargándolo y subiéndolo al portal de la DT).
+ * huella SHA-256 para acreditar su integridad). Va dentro del paquete que la empresa sube al SUAC de la
+ * Dirección del Trabajo.
  */
-
-/** Hitos de Ley Karin que consisten en remitir antecedentes a la DT. */
-export const DT_SEND_KEYS = ["dt_start_notice", "dt_report", "dt_referral"] as const;
-
-// Las evidencias van adjuntas mientras quepan en un correo; si no, el PDF las lista con su huella.
-const MAX_ATTACHMENTS_BYTES = 15 * 1024 * 1024;
 
 const STATUS_LABEL: Record<string, string> = {
   received: "Recibida",
@@ -166,69 +159,51 @@ async function loadForDossier(tenant: Tenant, userId: string, role: CaseRole, id
   return getVisibleCase(tenant, userId, role, id);
 }
 
-/** PDF del expediente para descargarlo. */
-export async function buildCaseDossier(tenant: Tenant, userId: string, role: CaseRole, id: string, generatedBy: string) {
-  const data = await loadForDossier(tenant, userId, role, id);
-  return { code: data.case.code, pdf: await render(tenant, data, generatedBy) };
-}
-
-const sendSchema = z.object({
-  milestoneKey: z.enum(DT_SEND_KEYS, { message: "Este hito no se envía a la DT" }),
-  to: z.email({ message: "Correo de destino inválido" }).max(200),
-  message: z.string().trim().max(3000).optional(),
-  attachEvidence: z.boolean().default(true),
-});
-
 /**
- * Envía el expediente a la DT por correo y registra el hito como cumplido. Solo el gestor, solo Ley Karin y solo
- * cuando el hito está pendiente y corresponde registrarlo (mismas reglas que «Registrar»).
+ * Paquete para la DT: un ZIP con el expediente en PDF, las evidencias originales (sin recomprimir, tal como llegaron)
+ * y un LEEME con los pasos y los datos que pide el formulario del SUAC. La empresa lo sube a mano en
+ * tramitesjuridico.dt.gob.cl (la DT no recibe estos trámites por correo) y luego registra el paso en el canal.
  */
-export async function sendDossierToDt(tenant: Tenant, userId: string, role: CaseRole, id: string, generatedBy: string, raw: unknown) {
-  const input = sendSchema.parse(raw);
-  if (role !== "case_manager") throw new HttpError(403, "Solo el gestor de denuncias envía antecedentes a la DT.");
+export async function buildDtPackage(tenant: Tenant, userId: string, role: CaseRole, id: string, generatedBy: string) {
   const data = await loadForDossier(tenant, userId, role, id);
   const c = data.case;
-  if (c.category.framework !== "ley_karin") throw new HttpError(400, "El envío a la DT solo aplica a denuncias de Ley Karin.");
-  const milestone = c.deadlines.find((m) => m.key === input.milestoneKey);
-  if (!milestone?.canRegister) throw new HttpError(400, "Ese paso aún no corresponde, ya fue registrado o no aplica a esta denuncia.");
+  const zip = new JSZip();
+  zip.file(`01-Expediente-${c.code}.pdf`, await render(tenant, data, generatedBy));
 
-  const pdf = await render(tenant, data, generatedBy);
-  const attachments: { filename: string; content: Buffer; contentType?: string }[] = [
-    { filename: `Expediente-${c.code}.pdf`, content: pdf, contentType: "application/pdf" },
-  ];
-  let total = pdf.length;
-  let attached = 0;
-  if (input.attachEvidence) {
-    for (const f of data.files) {
-      if (total + f.sizeBytes > MAX_ATTACHMENTS_BYTES) break;
-      const { file, body } = await readCaseFile(tenant, id, f.id);
-      attachments.push({ filename: file.file_name, content: body, contentType: file.mime });
-      total += body.length;
-      attached++;
-    }
+  // Prefijo numerado: evita nombres repetidos y coincide con el orden del expediente.
+  const lines: string[] = [];
+  for (const [i, f] of data.files.entries()) {
+    const { file, body } = await readCaseFile(tenant, id, f.id);
+    const name = `${String(i + 1).padStart(2, "0")}-${file.file_name}`;
+    zip.file(`evidencias/${name}`, body);
+    lines.push(`  ${name}  (${fmtSize(file.size_bytes)})  SHA-256 ${file.sha256}`);
   }
-  const skipped = input.attachEvidence ? data.files.length - attached : data.files.length;
 
-  const company = tenant.legal_name ?? tenant.name;
-  const lines = [
-    `${company}${tenant.tax_id ? `, RUT ${tenant.tax_id},` : ""} remite los antecedentes de la denuncia ${c.code} (Ley 21.643): ${milestone.label.toLowerCase()}.`,
-    ...(input.message ? [input.message] : []),
-    `Se adjunta el expediente en PDF${attached ? ` y ${attached} evidencia(s)` : ""}.`,
-    ...(skipped ? [`${skipped} evidencia(s) no se adjuntaron por tamaño; el expediente las individualiza con su huella SHA-256.`] : []),
-  ];
-  const route = await sendMail(
-    {
-      to: input.to,
-      subject: `Denuncia Ley Karin ${c.code} — ${company}`,
-      text: lines.join("\n\n"),
-      html: lines.map((l) => `<p>${l.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`)}</p>`).join(""),
-      attachments,
-    },
-    { tenant, organization: company },
-  );
-  if (!route) throw new HttpError(502, "No se pudo enviar el correo. Revisa el correo saliente o descarga el PDF y envíalo a mano.");
+  const done = (key: string) => c.deadlines.find((m) => m.key === key && m.done)?.doneAt;
+  const readme = [
+    `Denuncia ${c.code} — ${tenant.legal_name ?? tenant.name}${tenant.tax_id ? ` (RUT ${tenant.tax_id})` : ""}`,
+    `Generado el ${fmtDateTime(new Date())} por ${generatedBy}.`,
+    "",
+    "CÓMO PRESENTARLO A LA DIRECCIÓN DEL TRABAJO",
+    "1. El representante laboral electrónico de la empresa ingresa con su Clave Única a https://tramitesjuridico.dt.gob.cl/",
+    "2. Elige el trámite de Ley Karin que corresponde: derivación de la denuncia, aviso de inicio de la investigación o depósito de la investigación.",
+    "3. Completa el formulario con los datos de abajo y adjunta como documentos de respaldo el expediente PDF y los archivos de la carpeta «evidencias» (PDF, JPG, DOC o similares; máximo 50 MB cada uno).",
+    "4. Guarda el comprobante y registra el paso en el canal de denuncias («Registrar»), indicando el número de ingreso.",
+    "",
+    "DATOS PARA EL FORMULARIO",
+    `  Fecha de recepción de la denuncia: ${fmtDate(c.receivedAt)}`,
+    `  Investiga: ${c.route === "dt" ? "Dirección del Trabajo (derivación)" : c.route === "internal" ? "La empresa (investigación interna)" : "por definir"}`,
+    ...(done("investigation") ? [`  Término de la investigación: ${fmtDate(done("investigation"))}`] : []),
+    ...(c.proposal ? [`  Conclusión: ${c.proposal}`] : []),
+    "  Medidas de resguardo: ver la sección «Trazabilidad» del expediente.",
+    "",
+    "EVIDENCIAS (archivos originales; la huella SHA-256 permite comprobar que no fueron modificados)",
+    ...(lines.length ? lines : ["  No hay evidencias adjuntas."]),
+    "",
+    "Documento reservado: contiene datos personales y posiblemente datos sensibles (Ley 21.719). No lo reenvíes por correo ni lo guardes en carpetas compartidas.",
+  ].join("\r\n");
+  zip.file("00-LEEME.txt", readme);
 
-  const detail = `Enviado por correo a ${input.to} desde el canal: expediente PDF${attached ? ` y ${attached} evidencia(s)` : ""}.`;
-  const result = await applyCaseAction(tenant, userId, role, id, "milestone", { key: input.milestoneKey, detail });
-  return { ...result, attached, skipped };
+  const content = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  return { code: c.code, zip: content };
 }

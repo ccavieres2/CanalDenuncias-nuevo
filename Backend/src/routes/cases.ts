@@ -3,7 +3,7 @@ import { z } from "zod";
 import { HttpError } from "../errors.js";
 import { requireRole } from "../middleware/auth.js";
 import { getAlerts } from "../services/alerts.js";
-import { buildCaseDossier, sendDossierToDt } from "../services/case-dossier.js";
+import { buildDtPackage } from "../services/case-dossier.js";
 import { audit, listAuditEvents } from "../services/audit.js";
 import {
   CASE_ACTIONS,
@@ -133,26 +133,21 @@ casesRouter.get("/:id/files/:fileId", async (req, res) => {
   res.send(body);
 });
 
-/** Expediente en PDF (datos, trazabilidad, mensajes y evidencias) para remitirlo a mano. La descarga se audita. */
-casesRouter.get("/:id/dossier", async (req, res) => {
+/**
+ * Paquete para la DT (ZIP con el expediente en PDF, las evidencias originales y las instrucciones del SUAC). La DT no
+ * recibe estos trámites por correo: la empresa sube el contenido a tramitesjuridico.dt.gob.cl. La descarga se audita.
+ */
+casesRouter.get("/:id/dt-package", async (req, res) => {
   const id = caseId(req.params.id);
-  const { code, pdf } = await buildCaseDossier(req.tenant!, req.actor!.id, roleOf(req.actor!.role), id, req.actor!.name);
-  await audit(req, { action: "case.dossier_exported", targetType: "case", targetId: id, targetLabel: code, tenantSlug: req.tenant!.slug });
+  const { code, zip } = await buildDtPackage(req.tenant!, req.actor!.id, roleOf(req.actor!.role), id, req.actor!.name);
+  await audit(req, { action: "case.dt_package_exported", targetType: "case", targetId: id, targetLabel: code, tenantSlug: req.tenant!.slug });
   res.set({
-    "Content-Type": "application/pdf",
-    "Content-Length": String(pdf.length),
-    "Content-Disposition": `attachment; filename="Expediente-${code}.pdf"`,
+    "Content-Type": "application/zip",
+    "Content-Length": String(zip.length),
+    "Content-Disposition": `attachment; filename="DT-${code}.zip"`,
     "Cache-Control": "no-store",
   });
-  res.send(pdf);
-});
-
-/** Envía el expediente a la DT por correo y deja el hito registrado (Ley Karin, solo el gestor). */
-casesRouter.post("/:id/send-dt", requireRole("case_manager"), async (req, res) => {
-  const id = caseId(req.params.id);
-  const result = await sendDossierToDt(req.tenant!, req.actor!.id, roleOf(req.actor!.role), id, req.actor!.name, req.body);
-  await audit(req, { action: "case.sent_to_dt", targetType: "case", targetId: id, targetLabel: result.code, tenantSlug: req.tenant!.slug });
-  res.json(result);
+  res.send(zip);
 });
 
 /** Acciones del flujo (asignar, diligencias, proponer, aprobar, mensajes…). El servicio valida rol y estado. */

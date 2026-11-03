@@ -15,7 +15,6 @@ import {
 import { ApiError, api, downloadFile } from "../../lib/api";
 import { ACTION_UI } from "../../lib/case-actions";
 import { usePolling } from "../../lib/use-polling";
-import { SendToDtDialog } from "./SendToDtDialog";
 import {
   CASE_VIEW,
   type CaseAction,
@@ -206,8 +205,7 @@ export function CaseDetailPage() {
     milestoneKey?: string;
   } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [sendDt, setSendDt] = useState<{ key: string; label: string } | null>(null);
-  const [dossierBusy, setDossierBusy] = useState(false);
+  const [packageBusy, setPackageBusy] = useState(false);
 
   useEffect(() => {
     api<CaseResponse>(`${apiBase}/cases/${id}`, { token })
@@ -244,15 +242,16 @@ export function CaseDetailPage() {
     reload();
   }
 
-  async function downloadDossier() {
-    setDossierBusy(true);
+  /** ZIP con el expediente en PDF y las evidencias originales, para subirlo al SUAC de la DT. */
+  async function downloadDtPackage() {
+    setPackageBusy(true);
     setError(null);
     try {
-      await downloadFile(`${apiBase}/cases/${id}/dossier`, `Expediente-${data?.case.code ?? id}.pdf`, token);
+      await downloadFile(`${apiBase}/cases/${id}/dt-package`, `DT-${data?.case.code ?? id}.zip`, token);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo generar el PDF");
+      setError(err instanceof ApiError ? err.message : "No se pudo generar el paquete");
     } finally {
-      setDossierBusy(false);
+      setPackageBusy(false);
     }
   }
 
@@ -819,11 +818,7 @@ export function CaseDetailPage() {
             }
             dt={
               role === "case_manager" && c.category.framework === "ley_karin"
-                ? {
-                    onDossier: downloadDossier,
-                    dossierBusy,
-                    onSend: (m) => setSendDt({ key: m.key, label: m.label }),
-                  }
+                ? { onDownload: downloadDtPackage, busy: packageBusy }
                 : undefined
             }
             onAddTask={
@@ -834,23 +829,6 @@ export function CaseDetailPage() {
           />
         </aside>
       </div>
-
-      {sendDt && (
-        <SendToDtDialog
-          apiBase={apiBase}
-          caseId={id}
-          token={token}
-          milestone={sendDt}
-          filesCount={data.files.length}
-          onClose={() => setSendDt(null)}
-          onDone={(summary) => {
-            setSendDt(null);
-            setFlash(summary);
-            reload();
-            window.scrollTo({ top: 0, behavior: "smooth" });
-          }}
-        />
-      )}
 
       {dialog && (
         <CaseActionDialog
@@ -895,7 +873,7 @@ const SOURCE_TAG: Record<
   },
 };
 
-// Pasos de Ley Karin que consisten en remitir antecedentes a la DT (los mismos del backend).
+// Pasos de Ley Karin que se presentan a la DT en su portal (SUAC): derivación, aviso de inicio y depósito.
 const DT_SEND_KEYS = ["dt_start_notice", "dt_report", "dt_referral"];
 
 function ProcedurePanel({
@@ -913,8 +891,8 @@ function ProcedurePanel({
   onRegister: (key: string) => void;
   onExtend: (key: string) => void;
   onAddTask?: () => void;
-  /** Ley Karin, gestor: generar el expediente y enviarlo a la DT en los pasos que se le remiten. */
-  dt?: { onDossier: () => void; dossierBusy: boolean; onSend: (m: Milestone) => void };
+  /** Ley Karin, gestor: descargar el paquete para la DT en los pasos que se le presentan. */
+  dt?: { onDownload: () => void; busy: boolean };
 }) {
   const flowNote =
     framework === "ley_karin"
@@ -1036,23 +1014,15 @@ function ProcedurePanel({
                 {(m.canRegister || m.canExtend) && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {dt && m.canRegister && DT_SEND_KEYS.includes(m.key) && (
-                      <>
-                        <button
-                          onClick={dt.onDossier}
-                          disabled={dt.dossierBusy}
-                          className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-gray-600 ring-1 ring-line ring-inset transition hover:bg-gray-50 disabled:opacity-60"
-                        >
-                          <Icon name="download" className="size-3" />
-                          {dt.dossierBusy ? "Generando…" : "Generar PDF"}
-                        </button>
-                        <button
-                          onClick={() => dt.onSend(m)}
-                          className="inline-flex items-center gap-1.5 rounded-md bg-highlight px-2 py-1 text-xs font-semibold text-white transition hover:opacity-90"
-                        >
-                          <Icon name="mail" className="size-3" />
-                          Enviar a la DT
-                        </button>
-                      </>
+                      <button
+                        onClick={dt.onDownload}
+                        disabled={dt.busy}
+                        title="Expediente en PDF y evidencias originales para subir en tramitesjuridico.dt.gob.cl"
+                        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-gray-600 ring-1 ring-line ring-inset transition hover:bg-gray-50 disabled:opacity-60"
+                      >
+                        <Icon name="download" className="size-3" />
+                        {dt.busy ? "Preparando…" : "Descargar para la DT (ZIP)"}
+                      </button>
                     )}
                     {m.canRegister && (
                       <button
