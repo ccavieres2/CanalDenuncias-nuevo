@@ -91,7 +91,7 @@ function render(tenant: Tenant, data: CaseView, generatedBy: string): Promise<Bu
 
   heading("3. Hechos denunciados");
   field("Asunto", c.subject);
-  field("Cuándo", c.occurredWhen);
+  field("Cuándo", c.occurredWhen?.replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$3-$2-$1"));
   field("Dónde", c.occurredWhere);
   field("Relación con la persona denunciada", c.offenderRelation);
   field("Los hechos continúan", c.ongoing === null || c.ongoing === undefined ? null : c.ongoing ? "Sí" : "No");

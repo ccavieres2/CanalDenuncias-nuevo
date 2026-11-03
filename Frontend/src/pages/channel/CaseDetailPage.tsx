@@ -39,7 +39,7 @@ import {
 import { useChannel } from "../../lib/channel-context";
 import { planHas } from "../../lib/plans";
 import { FRAMEWORKS, ROLES } from "../../lib/roles";
-import { formatBytes, formatDate } from "../../lib/ui-helpers";
+import { formatBytes, formatDate, formatOccurred } from "../../lib/ui-helpers";
 import { CaseActionDialog } from "./CaseActionDialog";
 import { DemoTag } from "./CasesPage";
 
@@ -448,7 +448,7 @@ export function CaseDetailPage() {
                   <dl className="mt-5 grid gap-5 border-t border-line-soft pt-5 sm:grid-cols-2">
                     {c.occurredWhen && (
                       <KeyValue label="Cuándo ocurrió">
-                        {c.occurredWhen}
+                        {formatOccurred(c.occurredWhen)}
                       </KeyValue>
                     )}
                     {c.occurredWhere && (

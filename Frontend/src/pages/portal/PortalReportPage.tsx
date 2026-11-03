@@ -9,6 +9,7 @@ import { Link } from "react-router";
 import { Alert, Button, Field, Icon, Select } from "../../components/ui";
 import { ApiError, api } from "../../lib/api";
 import { usePortal } from "../../lib/portal";
+import { formatOccurred, todayIso } from "../../lib/ui-helpers";
 import { AuthenticatorSetup } from "./AuthenticatorSetup";
 import { formatRut, isValidRut } from "../../lib/rut";
 import { FRAMEWORKS, FRAMEWORK_ORDER } from "../../lib/roles";
@@ -747,10 +748,12 @@ export function PortalReportPage() {
               <div className="grid gap-6 sm:grid-cols-2">
                 <Field
                   label="¿Cuándo ocurrió? (opcional)"
+                  type="date"
                   value={occurredWhen}
                   onChange={(e) => setOccurredWhen(e.target.value)}
-                  maxLength={200}
-                  placeholder="Fecha o periodo aproximado"
+                  min="1950-01-01"
+                  max={todayIso()}
+                  hint="Elige la fecha en el calendario. Si fue en varias fechas, indica la primera y cuéntalo en el relato."
                 />
                 <Field
                   label="¿Dónde ocurrió? (opcional)"
@@ -1083,7 +1086,7 @@ export function PortalReportPage() {
                   </span>
                   {(occurredWhen || occurredWhere) && (
                     <span className="mt-1 block text-gray-500">
-                      {[occurredWhen, occurredWhere]
+                      {[formatOccurred(occurredWhen), occurredWhere]
                         .filter(Boolean)
                         .join(" · ")}
                     </span>

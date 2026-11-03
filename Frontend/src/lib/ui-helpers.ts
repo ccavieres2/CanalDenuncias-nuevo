@@ -46,3 +46,13 @@ export function formatDate(value: string | null, withTime = false): string {
     ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}),
   });
 }
+
+/** Fecha de los hechos: AAAA-MM-DD → dd-mm-aaaa. Las denuncias antiguas (texto libre) se muestran tal cual. */
+export function formatOccurred(value: string | null | undefined): string {
+  if (!value) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : value;
+}
+
+/** Hoy en formato AAAA-MM-DD (hora local), para el máximo de un calendario. */
+export const todayIso = () => new Date().toLocaleDateString("en-CA");

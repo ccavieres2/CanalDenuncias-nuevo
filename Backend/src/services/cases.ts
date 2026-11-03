@@ -776,6 +776,23 @@ const pastDate = z
   .optional()
   .transform((v) => (v ? v : undefined));
 
+/**
+ * Fecha en que ocurrieron los hechos (opcional): AAAA-MM-DD, una fecha real (no 31-02), desde 1950 y no futura.
+ * Antes era texto libre; las denuncias antiguas lo conservan tal cual.
+ */
+const occurredDate = z
+  .string()
+  .trim()
+  .optional()
+  .transform((v) => (v ? v : undefined))
+  .refine((v) => v === undefined || (/^\d{4}-\d{2}-\d{2}$/.test(v) && new Date(`${v}T00:00:00Z`).toISOString().startsWith(v)), {
+    message: "Elige la fecha en el calendario",
+  })
+  .refine((v) => v === undefined || v >= "1950-01-01", { message: "La fecha es demasiado antigua" })
+  .refine((v) => v === undefined || v <= new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago" }).format(new Date()), {
+    message: "La fecha no puede ser futura",
+  });
+
 /** Fecha AAAA-MM-DD de hoy en adelante; vence al final de ese día en Chile. */
 const futureDate = z
   .string()
@@ -1294,7 +1311,7 @@ export const registerSchema = z.object({
   categoryId: z.uuid({ message: "Selecciona la categoría" }),
   subject: text(5, 150, "El título"),
   description: text(20, 10000, "El relato o acta"),
-  occurredWhen: optionalText(200),
+  occurredWhen: occurredDate,
   occurredWhere: optionalText(200),
   involved: involvedSchema,
   ...identityFields,
@@ -1437,7 +1454,7 @@ export const reportSchema = z
     categoryId: z.uuid({ message: "Selecciona de qué se trata" }),
     subject: text(5, 150, "El título"),
     description: text(30, 10000, "El relato"),
-    occurredWhen: optionalText(200),
+    occurredWhen: occurredDate,
     occurredWhere: optionalText(200),
     involved: z
       .array(z.object({ name: text(2, 150, "El nombre o cargo"), relation: z.enum(["Persona denunciada", "Testigo", "Otra persona involucrada"]) }))

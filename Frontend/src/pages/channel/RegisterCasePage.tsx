@@ -6,6 +6,7 @@ import { CHANNEL_LABEL, type CaseOrigin, type OriginChannel } from "../../lib/ca
 import { useChannel } from "../../lib/channel-context";
 import { FRAMEWORKS, FRAMEWORK_ORDER, type LegalFramework } from "../../lib/roles";
 import { formatRut, isValidRut } from "../../lib/rut";
+import { todayIso } from "../../lib/ui-helpers";
 
 type Origin = Exclude<CaseOrigin, "portal">;
 type Involved = { name: string; relation: "Persona denunciada" | "Testigo" | "Otra persona involucrada" };
@@ -381,7 +382,14 @@ export function RegisterCasePage() {
                 onChange={(e) => set("description")(e.target.value)}
               />
               <div className="grid gap-5 md:grid-cols-2">
-                <Field label="Cuándo ocurrió" value={form.occurredWhen} onChange={(e) => set("occurredWhen")(e.target.value)} maxLength={200} />
+                <Field
+                  label="Cuándo ocurrió"
+                  type="date"
+                  value={form.occurredWhen}
+                  onChange={(e) => set("occurredWhen")(e.target.value)}
+                  min="1950-01-01"
+                  max={todayIso()}
+                />
                 <Field label="Dónde ocurrió" value={form.occurredWhere} onChange={(e) => set("occurredWhere")(e.target.value)} maxLength={200} />
               </div>
             </div>
