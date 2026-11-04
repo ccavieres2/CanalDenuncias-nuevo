@@ -253,7 +253,7 @@ export function PortalTrackPage() {
               <MessageComposer
                 onSend={send}
                 placeholder="Escribe al equipo del canal…"
-                hint={view.isAnonymous ? "Sigues siendo anónimo: no incluyas datos que te identifiquen si no quieres." : undefined}
+                hint={view.isAnonymous ? "Sigues siendo anónimo: no incluyas datos que te identifiquen si no quieres que te reconozcan." : undefined}
               />
             </div>
           ) : (

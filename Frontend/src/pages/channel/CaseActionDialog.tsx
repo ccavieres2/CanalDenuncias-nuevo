@@ -43,7 +43,7 @@ const MILESTONE_HINT: Record<string, string> = {
   dt_result: "Conclusiones del informe de la DT.",
   measures_applied:
     "Medidas y sanciones aplicadas, y cómo se informó a la persona denunciante y a la denunciada.",
-  breach_assessment: "Qué datos y cuántas personas se vieron afectadas.",
+  breach_assessment: "Qué datos se vieron afectados y a cuántas personas.",
   agency_notice: "Medio y N° de ingreso del reporte a la Agencia.",
   holders_notice: "Cómo y cuándo se comunicó a los titulares.",
   prosecutor: "Fiscalía y N° de causa (RUC), o motivo para no denunciar.",

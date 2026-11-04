@@ -93,12 +93,12 @@ export function PortalHomePage() {
           </summary>
           <div className="grid gap-6 border-t border-line-soft px-5 py-5 text-sm leading-relaxed sm:grid-cols-2 sm:px-8">
             <div>
-              <p className="font-semibold text-gray-900">Lo que este canal no registra</p>
+              <p className="font-semibold text-gray-900">Lo que este canal no hace</p>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-gray-600">
-                <li>Tu dirección IP, tu navegador ni tu dispositivo.</li>
-                <li>Cookies ni datos guardados en tu navegador.</li>
-                <li>Conexiones a servicios de terceros (Google u otros).</li>
-                <li>Tu clave de seguimiento: solo guardamos una huella irreversible.</li>
+                <li>No registra tu dirección IP, tu navegador ni tu dispositivo.</li>
+                <li>No usa cookies ni guarda datos en tu navegador.</li>
+                <li>No se conecta a servicios de terceros (Google u otros).</li>
+                <li>No guarda tu clave de seguimiento: solo una huella irreversible que no permite recuperarla.</li>
               </ul>
             </div>
             <div>
@@ -109,7 +109,8 @@ export function PortalHomePage() {
                   visitas.
                 </li>
                 <li>No incluyas en el relato datos que solo tú conoces si no quieres que te reconozcan.</li>
-                <li>Guarda tu clave en un lugar privado y usa una ventana de navegación privada.</li>
+                <li>Usa una ventana de navegación privada (incógnito).</li>
+                <li>Guarda tu clave de seguimiento en un lugar que solo tú conozcas.</li>
               </ul>
             </div>
           </div>

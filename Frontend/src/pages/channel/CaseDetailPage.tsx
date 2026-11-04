@@ -104,7 +104,7 @@ function CaseFilesPanel({
       )}
       {files.length === 0 ? (
         <p className="text-sm text-gray-500">
-          El denunciante aún no adjunta archivos. Puede hacerlo desde su seguimiento mientras la denuncia esté abierta.
+          El denunciante aún no ha adjuntado archivos. Puede hacerlo desde su seguimiento mientras la denuncia esté abierta.
         </p>
       ) : (
         <ul className="divide-y divide-line-soft rounded-lg ring-1 ring-line ring-inset">

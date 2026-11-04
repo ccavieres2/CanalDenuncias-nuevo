@@ -308,7 +308,7 @@ function AreaCategoriesModal({
           })
         )}
         <p className="text-xs leading-relaxed text-gray-500">
-          Qué áreas pueden tener cada categoría se define en <strong>Categorías</strong>; aquí solo puedes quitarle
+          Qué áreas pueden hacerse cargo de cada categoría se define en <strong>Categorías</strong>; aquí solo puedes quitarle
           categorías a esta área. Si quitas una
           categoría, las personas de esta área que la tenían asignada dejan de tenerla.
         </p>

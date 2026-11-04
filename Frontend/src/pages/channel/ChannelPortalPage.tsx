@@ -8,10 +8,10 @@ const POLICY_TEMPLATE = `1. Objetivo
 Este canal permite a trabajadores, proveedores y terceros informar hechos que puedan constituir infracciones a la ley, al Reglamento Interno o al Código de Ética.
 
 2. Qué se puede denunciar
-Acoso laboral, acoso sexual y violencia en el trabajo (Ley 21.643), delitos de la Ley 20.393 y 21.595, conflictos de interés, discriminación y otras faltas a la normativa interna.
+Acoso laboral, acoso sexual y violencia en el trabajo (Ley 21.643), delitos de las leyes 20.393 y 21.595, conflictos de interés, discriminación y otras faltas a la normativa interna.
 
 3. Confidencialidad y anonimato
-La identidad del denunciante y el contenido de la denuncia se tratan con estricta reserva. Puedes denunciar de forma anónima; en ese caso, guarda tu código de seguimiento para conocer el estado y responder consultas.
+La identidad del denunciante y el contenido de la denuncia se tratan con estricta reserva. Puedes denunciar de forma anónima; en ese caso, guarda tu clave de seguimiento para conocer el estado de tu denuncia y responder las consultas del equipo.
 
 4. Prohibición de represalias
 Ninguna persona que denuncie de buena fe será objeto de represalias. Cualquier represalia será investigada y sancionada.
@@ -154,7 +154,7 @@ export function ChannelPortalPage() {
             <Panel title="Anonimato">
               <Toggle
                 label="Permitir denuncias anónimas"
-                description="Recomendado. La Ley 21.595 y las buenas prácticas (ISO 37002) esperan que el canal permita denunciar sin identificarse. El denunciante recibe un código para seguir su caso. No aplica a Ley Karin: la Dirección del Trabajo exige identificar a la persona afectada."
+                description="Recomendado. La Ley 21.595 y las buenas prácticas (ISO 37002) esperan que el canal permita denunciar sin identificarse. El denunciante recibe una clave para seguir su caso. No aplica a Ley Karin: la Dirección del Trabajo exige identificar a la persona afectada."
                 checked={form.allowAnonymous}
                 onChange={(v) => set("allowAnonymous", v)}
               />

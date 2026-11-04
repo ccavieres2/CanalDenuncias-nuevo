@@ -170,7 +170,7 @@ export function ChannelUsersPage() {
           counter={members ? visible.length : undefined}
           toolbar={
             <div className="space-y-4">
-              <SearchInput value={query} onChange={setQuery} placeholder="Buscar por nombre, email o área" />
+              <SearchInput value={query} onChange={setQuery} placeholder="Buscar por nombre, correo o área" />
               <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
                 {(["", ...ROLE_ORDER] as const).map((role) => (
                   <button
